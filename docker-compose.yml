@@ -1,0 +1,23 @@
+version: '3.4'
+services:
+
+  test:
+    build:
+      context: .
+      target: test
+    depends_on:
+      - localstack
+    environment:
+      ENVIRONMENT: local
+      SERVICE_NAME: discover
+      TIER: s3clean
+      AWS_ACCESS_KEY_ID: xxxx
+      AWS_SECRET_ACCESS_KEY: yyyy
+      AWS_DEFAULT_REGION: 'us-east-1'
+
+  localstack:
+    image: localstack/localstack
+    environment:
+      SERVICES: s3
+    expose:
+      - "4572"
