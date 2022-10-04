@@ -38,7 +38,7 @@ TIER = os.environ['TIER']
 FULL_SERVICE_NAME = f'{SERVICE_NAME}-{TIER}'
 
 if ENVIRONMENT == 'local':
-    S3_URL = 'http://localstack:4572'
+    S3_URL = 'http://localstack:4566'
 else:
     S3_URL = None
 
