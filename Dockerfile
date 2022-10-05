@@ -41,5 +41,6 @@ COPY --from=build lambda .
 
 COPY test.py .
 COPY test.txt .
+COPY pytest.ini .
 
 CMD ["python3", "-m", "pytest", "-s", "test.py"]
