@@ -2,8 +2,10 @@ import os
 import boto3
 import structlog
 
+
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
+
 
 def rewrite_event_to_message(logger, name, event_dict):
     """
@@ -28,7 +30,6 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt='iso'),
         structlog.processors.JSONRenderer()])
 
-
 # Main lambda handler
 # --------------------------------------------------
 
@@ -45,8 +46,8 @@ else:
 S3_CLIENT = boto3.client('s3', endpoint_url=S3_URL)
 PAGINATOR = S3_CLIENT.get_paginator('list_objects_v2')
 
-def lambda_handler(event, context):
 
+def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
     # Create basic Pennsieve log context
     log = structlog.get_logger()
     log = log.bind(**{'class': f'{lambda_handler.__module__}.{lambda_handler.__name__}'})
@@ -54,12 +55,13 @@ def lambda_handler(event, context):
 
     try:
         log.info('Reading environment')
-        publish_bucket_id = os.environ['PUBLISH_BUCKET']
         embargo_bucket_id = os.environ['EMBARGO_BUCKET']
-        asset_bucket_id   = os.environ['ASSET_BUCKET']
-        assets_prefix     = os.environ['DATASET_ASSETS_KEY_PREFIX']
+        asset_bucket_id = os.environ['ASSET_BUCKET']
+        assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
 
         log.info('Parsing event')
+
+        publish_bucket_id = event['s3_bucket']
 
         # Ensure the S3 key ends with a '/'
         if event['s3_key_prefix'].endswith('/'):
@@ -68,7 +70,7 @@ def lambda_handler(event, context):
             s3_key_prefix = '{}/'.format(event['s3_key_prefix'])
 
         assert s3_key_prefix.endswith('/')
-        assert len(s3_key_prefix) > 1 # At least one character + slash
+        assert len(s3_key_prefix) > 1  # At least one character + slash
 
         dataset_assets_prefix = '{}/{}'.format(assets_prefix, s3_key_prefix)
 
@@ -76,6 +78,7 @@ def lambda_handler(event, context):
         log = log.bind(
             pennsieve={
                 'service_name': FULL_SERVICE_NAME,
+                's3_bucket': publish_bucket_id,
                 's3_key_prefix': s3_key_prefix
             },
         )
@@ -83,22 +86,25 @@ def lambda_handler(event, context):
         log.info('Starting lambda')
 
         log.info('Deleting objects from bucket {} under key {}'.format(publish_bucket_id, s3_key_prefix))
-        delete(publish_bucket_id, s3_key_prefix)
+        delete(s3_client, s3_paginator, publish_bucket_id, s3_key_prefix, is_requester_pays=True)
 
         log.info('Deleting objects from bucket {} under key {}'.format(embargo_bucket_id, s3_key_prefix))
-        delete(embargo_bucket_id, s3_key_prefix)
+        delete(s3_client, s3_paginator, embargo_bucket_id, s3_key_prefix)
 
         log.info('Deleting objects from bucket {} under key {}'.format(asset_bucket_id, dataset_assets_prefix))
-        delete(asset_bucket_id, dataset_assets_prefix)
+        delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
 
     except Exception as e:
         log.error(e, exc_info=True)
         raise
 
-def delete(bucket, prefix):
-    pages = PAGINATOR.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig={
+
+def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
+    requester_pays = {'RequestPayer': 'requester'} if is_requester_pays else {}
+
+    pages = s3_paginator.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig={
         'PageSize': 1000
-    })
+    }, **requester_pays)
 
     items_to_delete = dict(Objects=[])
 
@@ -109,10 +115,9 @@ def delete(bucket, prefix):
                 items_to_delete['Objects'].append(dict(Key=item['Key']))
                 # flush once aws limit reached
                 if len(items_to_delete['Objects']) >= 1000:
-
-                    S3_CLIENT.delete_objects(Bucket=bucket, Delete=items_to_delete)
+                    s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)
                     items_to_delete = dict(Objects=[])
 
             # flush the rest
             if len(items_to_delete['Objects']):
-                S3_CLIENT.delete_objects(Bucket=bucket, Delete=items_to_delete)
+                s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)

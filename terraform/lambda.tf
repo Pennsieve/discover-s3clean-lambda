@@ -17,7 +17,6 @@ resource "aws_lambda_function" "discover_s3clean_lambda_function" {
       ENVIRONMENT               = var.environment_name
       SERVICE_NAME              = var.service_name
       TIER                      = var.tier
-      PUBLISH_BUCKET            = data.terraform_remote_state.platform_infrastructure.outputs.discover_publish_bucket_id
       EMBARGO_BUCKET            = data.terraform_remote_state.platform_infrastructure.outputs.discover_embargo_bucket_id
       ASSET_BUCKET              = data.terraform_remote_state.platform_infrastructure.outputs.discover_s3_bucket_id
       DATASET_ASSETS_KEY_PREFIX = data.terraform_remote_state.platform_infrastructure.outputs.discover_bucket_dataset_assets_key_prefix

@@ -26,7 +26,6 @@ s3_resource = boto3.resource('s3', endpoint_url=S3_URL)
 @pytest.fixture(scope='module')
 def setup():
     os.environ.update({
-        'PUBLISH_BUCKET': PUBLISH_BUCKET,
         'EMBARGO_BUCKET': EMBARGO_BUCKET,
         'ASSET_BUCKET': ASSET_BUCKET,
         'DATASET_ASSETS_KEY_PREFIX': DATASET_ASSETS_KEY_PREFIX
@@ -51,7 +50,6 @@ def asset_bucket(setup):
 
 
 def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
-
     s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
     asset_key_to_keep = '{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_key_to_keep)
 
@@ -65,7 +63,8 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_bucket': PUBLISH_BUCKET
     }, {})
 
     # VERIFY RESULTS
@@ -75,7 +74,6 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
 
 
 def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_bucket):
-
     s3_keys_to_delete = create_keys(S3_PREFIX_TO_DELETE, FILENAME)
     s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
     asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, FILENAME)
@@ -98,7 +96,8 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_bucket': PUBLISH_BUCKET
     }, {})
 
     # VERIFY RESULTS
@@ -108,7 +107,6 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
 
 
 def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_bucket):
-
     s3_key_to_delete = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
     s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
     asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, FILENAME)
@@ -129,13 +127,21 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE + "/"
+        's3_key_prefix': S3_PREFIX_TO_DELETE + "/",
+        's3_bucket': PUBLISH_BUCKET
     }, {})
 
     # VERIFY RESULTS
     assert s3_keys(publish_bucket) == [s3_key_to_keep]
     assert s3_keys(embargo_bucket) == [s3_key_to_keep]
     assert s3_keys(asset_bucket) == [asset_key_to_keep]
+
+
+def test_include_requestor_pays():
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_bucket': PUBLISH_BUCKET
+    }, {}, s3_client=MockClient(), s3_paginator=MockPaginator())
 
 
 def setup_bucket(bucket_name):
@@ -152,3 +158,28 @@ def s3_keys(bucket):
 def create_keys(prefix, filename):
     i = range(1, 1201)
     return list(map(lambda x: '{}/{}{}'.format(prefix, x, filename), i))
+
+
+def assert_publish_bucket_request_contains_requester_pays(**kwargs):
+    if kwargs['Bucket'] == PUBLISH_BUCKET:
+        assert kwargs.get('RequestPayer') == 'requester'
+    else:
+        assert kwargs.get('RequestPayer') is None
+
+
+class MockClient:
+    @staticmethod
+    def delete_objects(**kwargs):
+        assert_publish_bucket_request_contains_requester_pays(**kwargs)
+
+
+class MockPaginator:
+    @staticmethod
+    def paginate(**kwargs):
+        assert_publish_bucket_request_contains_requester_pays(**kwargs)
+        prefix = kwargs['Prefix']
+        page_size = kwargs['PaginationConfig']['PageSize']
+        keys = create_keys(prefix, FILENAME)
+        for i in range(0, len(keys), page_size):
+            key_maps = [{'Key': k} for k in keys[i:i+page_size]]
+            yield dict(Contents=key_maps)
