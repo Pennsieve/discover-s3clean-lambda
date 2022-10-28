@@ -55,13 +55,13 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
 
     try:
         log.info('Reading environment')
-        embargo_bucket_id = os.environ['EMBARGO_BUCKET']
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
 
         log.info('Parsing event')
 
-        publish_bucket_id = event['s3_bucket']
+        publish_bucket_id = event['publish_bucket']
+        embargo_bucket_id = event['embargo_bucket']
 
         # Ensure the S3 key ends with a '/'
         if event['s3_key_prefix'].endswith('/'):
@@ -78,7 +78,8 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         log = log.bind(
             pennsieve={
                 'service_name': FULL_SERVICE_NAME,
-                's3_bucket': publish_bucket_id,
+                'publish_bucket': publish_bucket_id,
+                'embargo_bucket': embargo_bucket_id,
                 's3_key_prefix': s3_key_prefix
             },
         )
@@ -89,7 +90,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         delete(s3_client, s3_paginator, publish_bucket_id, s3_key_prefix, is_requester_pays=True)
 
         log.info('Deleting objects from bucket {} under key {}'.format(embargo_bucket_id, s3_key_prefix))
-        delete(s3_client, s3_paginator, embargo_bucket_id, s3_key_prefix)
+        delete(s3_client, s3_paginator, embargo_bucket_id, s3_key_prefix, is_requester_pays=True)
 
         log.info('Deleting objects from bucket {} under key {}'.format(asset_bucket_id, dataset_assets_prefix))
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
