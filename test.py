@@ -26,7 +26,6 @@ s3_resource = boto3.resource('s3', endpoint_url=S3_URL)
 @pytest.fixture(scope='module')
 def setup():
     os.environ.update({
-        'EMBARGO_BUCKET': EMBARGO_BUCKET,
         'ASSET_BUCKET': ASSET_BUCKET,
         'DATASET_ASSETS_KEY_PREFIX': DATASET_ASSETS_KEY_PREFIX
     })
@@ -64,7 +63,8 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
     # RUN LAMBDA
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE,
-        's3_bucket': PUBLISH_BUCKET
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET
     }, {})
 
     # VERIFY RESULTS
@@ -97,7 +97,8 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
     # RUN LAMBDA
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE,
-        's3_bucket': PUBLISH_BUCKET
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET
     }, {})
 
     # VERIFY RESULTS
@@ -128,7 +129,8 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
     # RUN LAMBDA
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE + "/",
-        's3_bucket': PUBLISH_BUCKET
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET
     }, {})
 
     # VERIFY RESULTS
@@ -140,7 +142,8 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
 def test_include_requestor_pays():
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE,
-        's3_bucket': PUBLISH_BUCKET
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET
     }, {}, s3_client=MockClient(), s3_paginator=MockPaginator())
 
 
@@ -160,8 +163,8 @@ def create_keys(prefix, filename):
     return list(map(lambda x: '{}/{}{}'.format(prefix, x, filename), i))
 
 
-def assert_publish_bucket_request_contains_requester_pays(**kwargs):
-    if kwargs['Bucket'] == PUBLISH_BUCKET:
+def assert_custom_bucket_request_contains_requester_pays(**kwargs):
+    if kwargs['Bucket'] == PUBLISH_BUCKET or kwargs['Bucket'] == EMBARGO_BUCKET:
         assert kwargs.get('RequestPayer') == 'requester'
     else:
         assert kwargs.get('RequestPayer') is None
@@ -170,13 +173,13 @@ def assert_publish_bucket_request_contains_requester_pays(**kwargs):
 class MockClient:
     @staticmethod
     def delete_objects(**kwargs):
-        assert_publish_bucket_request_contains_requester_pays(**kwargs)
+        assert_custom_bucket_request_contains_requester_pays(**kwargs)
 
 
 class MockPaginator:
     @staticmethod
     def paginate(**kwargs):
-        assert_publish_bucket_request_contains_requester_pays(**kwargs)
+        assert_custom_bucket_request_contains_requester_pays(**kwargs)
         prefix = kwargs['Prefix']
         page_size = kwargs['PaginationConfig']['PageSize']
         keys = create_keys(prefix, FILENAME)
