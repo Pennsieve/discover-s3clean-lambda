@@ -63,11 +63,33 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         publish_bucket_id = event['publish_bucket']
         embargo_bucket_id = event['embargo_bucket']
 
-        # Ensure the S3 key ends with a '/'
-        if event['s3_key_prefix'].endswith('/'):
-            s3_key_prefix = event['s3_key_prefix']
+        workflow_id = 4
+        if "workflow_id" in event:
+            workflow_id = event["workflow_id"]
+
+        if workflow_id == 5:
+            purge_v5()
         else:
-            s3_key_prefix = '{}/'.format(event['s3_key_prefix'])
+            purge_v4(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, event['s3_key_prefix'], s3_client, s3_paginator)
+
+    except Exception as e:
+        log.error(e, exc_info=True)
+        raise
+
+
+def purge_v5():
+    # TODO: form well-known file name ➝ "Published Files List"
+    # TODO: check whether "Published Files List" is present (on S3)
+    # TODO: when "Published Files List" is present, open the file, read the content, and delete files listed in the file
+    pass
+
+def purge_v4(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix_evt, s3_client, s3_paginator):
+    try:
+        # Ensure the S3 key ends with a '/'
+        if s3_key_prefix_evt.endswith('/'):
+            s3_key_prefix = s3_key_prefix_evt
+        else:
+            s3_key_prefix = '{}/'.format(s3_key_prefix_evt)
 
         assert s3_key_prefix.endswith('/')
         assert len(s3_key_prefix) > 1  # At least one character + slash
@@ -98,7 +120,6 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
     except Exception as e:
         log.error(e, exc_info=True)
         raise
-
 
 def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
     requester_pays = {'RequestPayer': 'requester'} if is_requester_pays else {}
