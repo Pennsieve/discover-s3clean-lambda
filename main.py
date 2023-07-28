@@ -65,7 +65,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
 
         workflow_id = 4
         if "workflow_id" in event:
-            workflow_id = event["workflow_id"]
+            workflow_id = int(event["workflow_id"])
 
         if workflow_id == 5:
             purge_v5()
