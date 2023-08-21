@@ -1,14 +1,13 @@
 FROM amazonlinux:latest as build
 
 RUN yum -y install git \
-    python37 \
-    python37-pip \
+    python39 \
+    python-pip \
     zip \
     unzip && \
     yum clean all
 
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install boto3==1.9.42
+RUN python3 -m pip install boto3==1.9.42
 
 WORKDIR lambda
 RUN mkdir bin
@@ -24,13 +23,12 @@ RUN zip -r lambda.zip .
 FROM amazonlinux:latest as test
 
 RUN yum -y install git \
-    python37 \
-    python37-pip \
+    python39 \
+    python-pip \
     zip && \
     yum clean all
 
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install boto3==1.9.42
+RUN python3 -m pip install boto3==1.9.42
 
 WORKDIR lambda
 
