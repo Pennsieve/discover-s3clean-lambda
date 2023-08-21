@@ -1,8 +1,8 @@
 FROM amazonlinux:latest as build
 
 RUN yum -y install git \
-    python37 \
-    python37-pip \
+    python39 \
+    python39-pip \
     zip \
     unzip && \
     yum clean all
@@ -24,8 +24,8 @@ RUN zip -r lambda.zip .
 FROM amazonlinux:latest as test
 
 RUN yum -y install git \
-    python37 \
-    python37-pip \
+    python39 \
+    python39-pip \
     zip && \
     yum clean all
 
