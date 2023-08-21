@@ -1,6 +1,7 @@
 FROM amazonlinux:latest as build
 
 RUN yum -y install git \
+    findutils \
     python39 \
     python-pip \
     zip \
@@ -23,6 +24,7 @@ RUN zip -r lambda.zip .
 FROM amazonlinux:latest as test
 
 RUN yum -y install git \
+    findutils \
     python39 \
     python-pip \
     zip && \
