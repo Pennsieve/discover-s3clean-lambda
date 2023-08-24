@@ -95,13 +95,14 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         if workflow_id == 5:
             purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version)
         else:
-            purge_v4(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
+            purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
         raise
 
-def purge_v4(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix_evt, s3_client, s3_paginator):
+def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix_evt, s3_client, s3_paginator):
+    log.info(f"purge_v4() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix_evt: {s3_key_prefix_evt}")
     try:
         # Ensure the S3 key ends with a '/'
         if s3_key_prefix_evt.endswith('/'):
@@ -113,18 +114,6 @@ def purge_v4(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_i
         assert len(s3_key_prefix) > 1  # At least one character + slash
 
         dataset_assets_prefix = '{}/{}'.format(assets_prefix, s3_key_prefix)
-
-        # Rebind Pennsieve log context with event info
-        log = log.bind(
-            pennsieve={
-                'service_name': FULL_SERVICE_NAME,
-                'publish_bucket': publish_bucket_id,
-                'embargo_bucket': embargo_bucket_id,
-                's3_key_prefix': s3_key_prefix
-            },
-        )
-
-        log.info('Starting lambda purge_v4()')
 
         log.info('Deleting objects from bucket {} under key {}'.format(publish_bucket_id, s3_key_prefix))
         delete(s3_client, s3_paginator, publish_bucket_id, s3_key_prefix, is_requester_pays=True)
@@ -163,15 +152,18 @@ def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
                 s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)
 
 def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version):
+    log.info(f"purge_v5() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} cleanup_stage: {cleanup_stage} dataset_id: {dataset_id} dataset_version: {dataset_version}")
     if cleanup_stage == CleanupStageInitial:
         # do nothing on initial cleanup during publishing
+        log.info("purge_v5() CleanupStageInitial ~> nothing to do")
         return
 
     if cleanup_stage == CleanupStageUnpublish:
+        log.info("purge_v5() CleanupStageUnpublish ~> will delete all versions of files")
         # Delete all versions of files in the Publish Bucket
-        delete_all_versions(s3_client, publish_bucket_id, dataset_id)
+        delete_all_versions(log, s3_client, publish_bucket_id, dataset_id)
         # Delete all versions of files in the Embargo Bucket
-        delete_all_versions(s3_client, embargo_bucket_id, dataset_id)
+        delete_all_versions(log, s3_client, embargo_bucket_id, dataset_id)
         # Delete all files in the Public Assets Bucket
         dataset_assets_prefix = '{}/{}'.format(assets_prefix, dataset_id)
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
@@ -185,7 +177,9 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
         dataset_assets_prefix = '{}/{}/{}'.format(assets_prefix, dataset_id, dataset_version)
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
 
-def delete_all_versions(s3_client, bucket_id, dataset_id):
+def delete_all_versions(log, s3_client, bucket_id, dataset_id):
+    log.info(f"delete_all_versions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
+
     prefix = f"{dataset_id}/"
     paginator = s3_client.get_paginator('list_object_versions')
     pages = paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
@@ -212,10 +206,12 @@ def delete_all_versions(s3_client, bucket_id, dataset_id):
         delete_object_version(s3_client, bucket_id, key, version)
 
 def undo_actions(log, s3_client, bucket_id, dataset_id):
+    log.info(f"undo_actions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
+
     file_actions = load_file_actions(log, s3_client, bucket_id, dataset_id)
 
     if file_actions is None:
-        log.info("undo_actions() file actions file not found -- cannot undo actions")
+        log.info("undo_actions() file actions file not found ~> cannot undo actions")
         return
 
     for file_action in file_actions:
@@ -241,7 +237,7 @@ def undo_copy(log, s3_client, file_action):
     if s3_version is None or s3_version == "":
         # no S3 version on the FileAction indicates that this is the first time a file was to be
         # published to that path, so we need to remove any versions of the file
-        delete_all_object_verions(log, s3_client, s3_bucket, s3_key)
+        delete_all_object_versions(log, s3_client, s3_bucket, s3_key)
     else:
         restore_version(log, s3_client, s3_bucket, s3_key, s3_version)
 
@@ -315,8 +311,8 @@ def load_file_actions(log, s3_client, bucket_id, dataset_id):
     file_actions = json.loads(s3_object["Body"].read())
     return file_actions
 
-def delete_all_object_verions(log, s3_client, s3_bucket, s3_key):
-    log.info(f"delete_all_object_verions() bucket: {s3_bucket} key: {s3_key}")
+def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
+    log.info(f"delete_all_object_versions() bucket: {s3_bucket} key: {s3_key}")
     versions = get_object_versions(s3_client, s3_bucket, s3_key)
     for version in versions:
         s3_version = version.get(S3VersionIdTag)
