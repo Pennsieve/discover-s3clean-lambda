@@ -80,4 +80,31 @@ data "aws_iam_policy_document" "lambda_iam_policy_document" {
 
     ]
   }
+
+  statement {
+    sid    = "S3ListGetDelete50"
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:ListBucket",
+      "s3:ListBucketVersions"
+    ]
+
+    resources = [
+      data.terraform_remote_state.platform_infrastructure.outputs.discover_publish50_bucket_arn,
+      "${data.terraform_remote_state.platform_infrastructure.outputs.discover_publish50_bucket_arn}/*",
+      data.terraform_remote_state.platform_infrastructure.outputs.discover_embargo50_bucket_arn,
+      "${data.terraform_remote_state.platform_infrastructure.outputs.discover_embargo50_bucket_arn}/*",
+      data.terraform_remote_state.platform_infrastructure.outputs.discover_s3_bucket_arn,
+      "${data.terraform_remote_state.platform_infrastructure.outputs.discover_s3_bucket_arn}/*",
+      data.terraform_remote_state.platform_infrastructure.outputs.sparc_publish50_bucket_arn,
+      "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_publish50_bucket_arn}/*",
+      data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo50_bucket_arn,
+      "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo50_bucket_arn}/*",
+
+    ]
+  }
 }
