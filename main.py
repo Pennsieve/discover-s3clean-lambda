@@ -93,7 +93,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         dataset_version = event.get("published_dataset_version", "-1")
 
         if workflow_id == 5:
-            purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version)
+            purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version)
         else:
             purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
