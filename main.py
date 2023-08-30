@@ -309,7 +309,8 @@ def load_file_actions(log, s3_client, bucket_id, dataset_id):
             raise
 
     file_actions = json.loads(s3_object["Body"].read())
-    return file_actions
+    file_actions_list = file_actions.get("fileActionList")
+    return file_actions_list
 
 def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_all_object_versions() bucket: {s3_bucket} key: {s3_key}")
