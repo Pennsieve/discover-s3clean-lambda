@@ -169,6 +169,7 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
 
     if cleanup_stage == CleanupStageFailure:
+        log.info("purge_v5() CleanupStageFailure ~> will undo actions and clean public assets bucket")
         # Undo File Actions in the Publish Bucket
         undo_actions(log, s3_client, publish_bucket_id, dataset_id)
         # Undo File Actions in the Embargo Bucket
@@ -213,6 +214,8 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
     if file_actions is None:
         log.info("undo_actions() file actions file not found ~> cannot undo actions")
         return
+
+    log.info(f"undo_actions() there are {len(file_actions)} file actions to undo")
 
     for file_action in file_actions:
         # TODO: validate file_action (required: 4 fields)
@@ -299,6 +302,7 @@ def is_latest(item):
 
 def load_file_actions(log, s3_client, bucket_id, dataset_id):
     s3_key = f"{dataset_id}/{FileActionKey}"
+    log.info(f"load_file_actions() bucket_id: {bucket_id} dataset_id: {dataset_id} s3_key: {s3_key}")
     try:
         s3_object = s3_client.get_object(Bucket=bucket_id, Key=s3_key)
     except ClientError as ex:
@@ -309,7 +313,8 @@ def load_file_actions(log, s3_client, bucket_id, dataset_id):
             raise
 
     file_actions = json.loads(s3_object["Body"].read())
-    return file_actions
+    file_actions_list = file_actions.get("fileActionList")
+    return file_actions_list
 
 def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_all_object_versions() bucket: {s3_bucket} key: {s3_key}")
