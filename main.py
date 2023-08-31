@@ -214,29 +214,34 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
 
 def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
     log.info(f"delete_dataset_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
-    s3_key = f"{dataset_id}/{DatasetAssetsKey}"
-    dataset_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_key)
+    s3_asset_key = f"{dataset_id}/{DatasetAssetsKey}"
+    dataset_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
     if dataset_assets is not None:
         for tag in ["bannerManifest", "readmeManifest", "changelogManifest"]:
+            log.info(f"delete_dataset_assets() looking for tag: {tag}")
             manifest = dataset_assets.get(tag)
             if manifest is not None:
-                s3_key = manifest.get("path")
+                log.info(f"delete_dataset_assets() found manifest: {manifest}")
+                s3_path = manifest.get("path")
+                s3_key = f"{dataset_id}/{s3_path}"
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
-        delete_object(log, s3_client, s3_bucket, s3_key)
+        delete_object(log, s3_client, s3_bucket, s3_asset_key)
 
 def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
     log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
-    s3_key = f"{dataset_id}/{GraphAssetsKey}"
-    graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_key)
+    s3_asset_key = f"{dataset_id}/{GraphAssetsKey}"
+    graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
     if graph_assets is not None:
         manifests = graph_assets.get("manifests")
         if manifests is not None:
             for manifest in manifests:
-                s3_key = manifest.get("path")
+                log.info(f"delete_graph_assets() manifest: {manifest}")
+                s3_path = manifest.get("path")
+                s3_key = f"{dataset_id}/{s3_path}"
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
-        delete_object(log, s3_client, s3_bucket, s3_key)
+        delete_object(log, s3_client, s3_bucket, s3_asset_key)
 
 def undo_actions(log, s3_client, bucket_id, dataset_id):
     log.info(f"undo_actions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
