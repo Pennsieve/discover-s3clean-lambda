@@ -58,6 +58,8 @@ CleanupStageFailure = "FAILURE"
 CleanupStageUnpublish = "UNPUBLISH"
 
 FileActionKey = "file-actions.json"
+DatasetAssetsKey = "publish.json"
+GraphAssetsKey = "graph.json"
 
 FileActionTag = "action"
 FileActionBucketTag = "bucket"
@@ -171,8 +173,12 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
     if cleanup_stage == CleanupStageFailure:
         log.info("purge_v5() CleanupStageFailure ~> will undo actions and clean public assets bucket")
         # Undo File Actions in the Publish Bucket
+        delete_dataset_assets(log, s3_client, publish_bucket_id, dataset_id)
+        delete_graph_assets(log, s3_client, publish_bucket_id, dataset_id)
         undo_actions(log, s3_client, publish_bucket_id, dataset_id)
         # Undo File Actions in the Embargo Bucket
+        delete_dataset_assets(log, s3_client, embargo_bucket_id, dataset_id)
+        delete_graph_assets(log, s3_client, embargo_bucket_id, dataset_id)
         undo_actions(log, s3_client, embargo_bucket_id, dataset_id)
         # Clean up the Public Assets Bucket
         dataset_assets_prefix = '{}/{}/{}'.format(assets_prefix, dataset_id, dataset_version)
@@ -206,6 +212,37 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
         version = o.get("VersionId")
         delete_object_version(s3_client, bucket_id, key, version)
 
+def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
+    log.info(f"delete_dataset_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
+    s3_asset_key = f"{dataset_id}/{DatasetAssetsKey}"
+    dataset_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
+    if dataset_assets is not None:
+        for tag in ["bannerManifest", "readmeManifest", "changelogManifest"]:
+            log.info(f"delete_dataset_assets() looking for tag: {tag}")
+            manifest = dataset_assets.get(tag)
+            if manifest is not None:
+                log.info(f"delete_dataset_assets() found manifest: {manifest}")
+                s3_path = manifest.get("path")
+                s3_key = f"{dataset_id}/{s3_path}"
+                s3_version = manifest.get("s3VersionId")
+                delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+        delete_object(log, s3_client, s3_bucket, s3_asset_key)
+
+def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
+    log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
+    s3_asset_key = f"{dataset_id}/{GraphAssetsKey}"
+    graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
+    if graph_assets is not None:
+        manifests = graph_assets.get("manifests")
+        if manifests is not None:
+            for manifest in manifests:
+                log.info(f"delete_graph_assets() manifest: {manifest}")
+                s3_path = manifest.get("path")
+                s3_key = f"{dataset_id}/{s3_path}"
+                s3_version = manifest.get("s3VersionId")
+                delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+        delete_object(log, s3_client, s3_bucket, s3_asset_key)
+
 def undo_actions(log, s3_client, bucket_id, dataset_id):
     log.info(f"undo_actions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
 
@@ -229,6 +266,8 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
             undo_delete(log, s3_client, file_action)
         else:
             log.info(f"undo_actions() unsupported action: {action}")
+
+    delete_object(log, s3_client, bucket_id, f"{dataset_id}/{FileActionKey}")
 
 def undo_copy(log, s3_client, file_action):
     log.info(f"undo_copy() file_action: {file_action}")
@@ -300,21 +339,29 @@ def find_latest_version(versions):
 def is_latest(item):
     return item.get(S3IsLatestTag, False)
 
-def load_file_actions(log, s3_client, bucket_id, dataset_id):
-    s3_key = f"{dataset_id}/{FileActionKey}"
-    log.info(f"load_file_actions() bucket_id: {bucket_id} dataset_id: {dataset_id} s3_key: {s3_key}")
+def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
+    log.info(f"load_json_file_from_s3() s3_bucket: {s3_bucket} s3_key: {s3_key}")
     try:
-        s3_object = s3_client.get_object(Bucket=bucket_id, Key=s3_key)
+        s3_object = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
     except ClientError as ex:
         if ex.response['Error']['Code'] == 'NoSuchKey':
-            log.info(f"load_file_actions() NoSuchKey - bucket: {bucket_id} key: {s3_key}")
+            log.info(f"load_json_file_from_s3() NoSuchKey - bucket: {s3_bucket} key: {s3_key}")
             return None
         else:
             raise
 
-    file_actions = json.loads(s3_object["Body"].read())
-    file_actions_list = file_actions.get("fileActionList")
-    return file_actions_list
+    json_file = json.loads(s3_object["Body"].read())
+    return json_file
+
+def load_file_actions(log, s3_client, bucket_id, dataset_id):
+    s3_key = f"{dataset_id}/{FileActionKey}"
+    log.info(f"load_file_actions() bucket_id: {bucket_id} dataset_id: {dataset_id} s3_key: {s3_key}")
+    file_actions = load_json_file_from_s3(log, s3_client, bucket_id, s3_key)
+    if file_actions is not None:
+        file_actions_list = file_actions.get("fileActionList")
+        return file_actions_list
+    else:
+        return None
 
 def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_all_object_versions() bucket: {s3_bucket} key: {s3_key}")
@@ -323,6 +370,10 @@ def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
         s3_version = version.get(S3VersionIdTag)
         if s3_version is not None:
             delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+
+def delete_object(log, s3_client, s3_bucket, s3_key):
+    log.info(f"delete_object() s3_bucket: {s3_bucket} s3_key: {s3_key}")
+    s3_client.delete_object(Bucket=s3_bucket, Key=s3_key)
 
 def delete_object_version(s3_client, s3_bucket, s3_key, s3_version):
     s3_client.delete_object(Bucket=s3_bucket, Key=s3_key, VersionId=s3_version)
