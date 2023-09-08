@@ -56,6 +56,7 @@ S3VersionIdTag = "VersionId"
 CleanupStageInitial = "INITIAL"
 CleanupStageFailure = "FAILURE"
 CleanupStageUnpublish = "UNPUBLISH"
+CleanupStageTidy = "TIDY"
 
 FileActionKey = "file-actions.json"
 DatasetAssetsKey = "publish.json"
@@ -72,6 +73,8 @@ FileActionDelete = "DeleteFile"
 FileActionUnknown = "Unknown"
 
 NoValue = "(none)"
+
+PublishingIntermediateFiles = ["file-actions.json", "graph.json", "outputs.json", "publish.json"]
 
 def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
     # Create basic Pennsieve log context
@@ -157,11 +160,16 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
     log.info(f"purge_v5() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} cleanup_stage: {cleanup_stage} dataset_id: {dataset_id} dataset_version: {dataset_version}")
     if cleanup_stage == CleanupStageInitial:
         # do nothing on initial cleanup during publishing
-        log.info("purge_v5() CleanupStageInitial ~> nothing to do")
+        log.info(f"purge_v5() {CleanupStageInitial} ~> nothing to do")
         return
 
+    if cleanup_stage == CleanupStageTidy:
+        log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
+        tidy_publication_directory(log, s3_client, publish_bucket_id, dataset_id)
+        tidy_publication_directory(log, s3_client, embargo_bucket_id, dataset_id)
+
     if cleanup_stage == CleanupStageUnpublish:
-        log.info("purge_v5() CleanupStageUnpublish ~> will delete all versions of files")
+        log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
         # Delete all versions of files in the Publish Bucket
         delete_all_versions(log, s3_client, publish_bucket_id, dataset_id)
         # Delete all versions of files in the Embargo Bucket
@@ -171,7 +179,7 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
 
     if cleanup_stage == CleanupStageFailure:
-        log.info("purge_v5() CleanupStageFailure ~> will undo actions and clean public assets bucket")
+        log.info(f"purge_v5() {CleanupStageFailure} ~> will undo actions and clean public assets bucket")
         # Undo File Actions in the Publish Bucket
         delete_dataset_assets(log, s3_client, publish_bucket_id, dataset_id)
         delete_graph_assets(log, s3_client, publish_bucket_id, dataset_id)
@@ -268,6 +276,12 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
             log.info(f"undo_actions() unsupported action: {action}")
 
     delete_object(log, s3_client, bucket_id, f"{dataset_id}/{FileActionKey}")
+
+def tidy_publication_directory(log, s3_client, s3_bucket_id, dataset_id):
+    log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} dataset_id: {dataset_id}")
+    for file_name in PublishingIntermediateFiles:
+        s3_key = f"{dataset_id}/{file_name}"
+        delete_all_object_versions(log, s3_client, s3_bucket_id, s3_key)
 
 def undo_copy(log, s3_client, file_action):
     log.info(f"undo_copy() file_action: {file_action}")
