@@ -160,16 +160,16 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
     log.info(f"purge_v5() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} cleanup_stage: {cleanup_stage} dataset_id: {dataset_id} dataset_version: {dataset_version}")
     if cleanup_stage == CleanupStageInitial:
         # do nothing on initial cleanup during publishing
-        log.info("purge_v5() CleanupStageInitial ~> nothing to do")
+        log.info(f"purge_v5() {CleanupStageInitial} ~> nothing to do")
         return
 
     if cleanup_stage == CleanupStageTidy:
-        log.info("purge_v5() CleanupStageTidy ~> will remove intermediate publishing files")
+        log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
         tidy_publication_directory(log, s3_client, publish_bucket_id, dataset_id)
         tidy_publication_directory(log, s3_client, embargo_bucket_id, dataset_id)
 
     if cleanup_stage == CleanupStageUnpublish:
-        log.info("purge_v5() CleanupStageUnpublish ~> will delete all versions of files")
+        log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
         # Delete all versions of files in the Publish Bucket
         delete_all_versions(log, s3_client, publish_bucket_id, dataset_id)
         # Delete all versions of files in the Embargo Bucket
@@ -179,7 +179,7 @@ def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
         delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
 
     if cleanup_stage == CleanupStageFailure:
-        log.info("purge_v5() CleanupStageFailure ~> will undo actions and clean public assets bucket")
+        log.info(f"purge_v5() {CleanupStageFailure} ~> will undo actions and clean public assets bucket")
         # Undo File Actions in the Publish Bucket
         delete_dataset_assets(log, s3_client, publish_bucket_id, dataset_id)
         delete_graph_assets(log, s3_client, publish_bucket_id, dataset_id)
