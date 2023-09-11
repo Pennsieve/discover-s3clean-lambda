@@ -1,10 +1,24 @@
 import os
 import json
+from dataclasses import dataclass
 
 import boto3
 from botocore.exceptions import ClientError
 
 import structlog
+
+@dataclass
+class S3CleanConfig:
+    """S3 Clean Invocation Config"""
+    asset_bucket_id: str
+    assets_prefix: str
+    publish_bucket_id: str
+    embargo_bucket_id: str
+    s3_key_prefix: str
+    cleanup_stage: str
+    workflow_id: int
+    dataset_id: str
+    dataset_version: str
 
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
@@ -97,8 +111,10 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         dataset_id = event.get("published_dataset_id","-1")
         dataset_version = event.get("published_dataset_version", "-1")
 
+        s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version)
+
         if workflow_id == 5:
-            purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version)
+            purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
             purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
@@ -156,41 +172,41 @@ def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
             if len(items_to_delete['Objects']):
                 s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)
 
-def purge_v5(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_client, s3_paginator, cleanup_stage, dataset_id, dataset_version):
-    log.info(f"purge_v5() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} cleanup_stage: {cleanup_stage} dataset_id: {dataset_id} dataset_version: {dataset_version}")
-    if cleanup_stage == CleanupStageInitial:
+def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
+    log.info(f"purge_v5() {s3_clean_config}")
+    if s3_clean_config.cleanup_stage == CleanupStageInitial:
         # do nothing on initial cleanup during publishing
         log.info(f"purge_v5() {CleanupStageInitial} ~> nothing to do")
         return
 
-    if cleanup_stage == CleanupStageTidy:
+    if s3_clean_config.cleanup_stage == CleanupStageTidy:
         log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
-        tidy_publication_directory(log, s3_client, publish_bucket_id, dataset_id)
-        tidy_publication_directory(log, s3_client, embargo_bucket_id, dataset_id)
+        tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
+        tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
 
-    if cleanup_stage == CleanupStageUnpublish:
+    if s3_clean_config.cleanup_stage == CleanupStageUnpublish:
         log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
         # Delete all versions of files in the Publish Bucket
-        delete_all_versions(log, s3_client, publish_bucket_id, dataset_id)
+        delete_all_versions(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
         # Delete all versions of files in the Embargo Bucket
-        delete_all_versions(log, s3_client, embargo_bucket_id, dataset_id)
+        delete_all_versions(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
         # Delete all files in the Public Assets Bucket
-        dataset_assets_prefix = '{}/{}'.format(assets_prefix, dataset_id)
-        delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
+        dataset_assets_prefix = '{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id)
+        delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
 
-    if cleanup_stage == CleanupStageFailure:
+    if s3_clean_config.cleanup_stage == CleanupStageFailure:
         log.info(f"purge_v5() {CleanupStageFailure} ~> will undo actions and clean public assets bucket")
         # Undo File Actions in the Publish Bucket
-        delete_dataset_assets(log, s3_client, publish_bucket_id, dataset_id)
-        delete_graph_assets(log, s3_client, publish_bucket_id, dataset_id)
-        undo_actions(log, s3_client, publish_bucket_id, dataset_id)
+        delete_dataset_assets(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
+        delete_graph_assets(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
+        undo_actions(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
         # Undo File Actions in the Embargo Bucket
-        delete_dataset_assets(log, s3_client, embargo_bucket_id, dataset_id)
-        delete_graph_assets(log, s3_client, embargo_bucket_id, dataset_id)
-        undo_actions(log, s3_client, embargo_bucket_id, dataset_id)
+        delete_dataset_assets(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
+        delete_graph_assets(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
+        undo_actions(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
         # Clean up the Public Assets Bucket
-        dataset_assets_prefix = '{}/{}/{}'.format(assets_prefix, dataset_id, dataset_version)
-        delete(s3_client, s3_paginator, asset_bucket_id, dataset_assets_prefix)
+        dataset_assets_prefix = '{}/{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id, s3_clean_config.dataset_version)
+        delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
 
 def delete_all_versions(log, s3_client, bucket_id, dataset_id):
     log.info(f"delete_all_versions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
