@@ -181,8 +181,8 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
 
     if s3_clean_config.cleanup_stage == CleanupStageTidy:
         log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
-        tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
-        tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
+        tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.s3_key_prefix)
+        tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.s3_key_prefix)
 
     if s3_clean_config.cleanup_stage == CleanupStageUnpublish:
         log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
@@ -238,7 +238,7 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
 
 def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
     log.info(f"delete_dataset_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
-    s3_asset_key = f"{dataset_id}/{DatasetAssetsKey}"
+    s3_asset_key = s3_key_path(dataset_id, DatasetAssetsKey)
     dataset_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
     if dataset_assets is not None:
         for tag in ["bannerManifest", "readmeManifest", "changelogManifest"]:
@@ -247,14 +247,14 @@ def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
             if manifest is not None:
                 log.info(f"delete_dataset_assets() found manifest: {manifest}")
                 s3_path = manifest.get("path")
-                s3_key = f"{dataset_id}/{s3_path}"
+                s3_key = s3_key_path(dataset_id, s3_path)
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
         delete_object(log, s3_client, s3_bucket, s3_asset_key)
 
 def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
     log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
-    s3_asset_key = f"{dataset_id}/{GraphAssetsKey}"
+    s3_asset_key = s3_key_path(dataset_id, GraphAssetsKey)
     graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
     if graph_assets is not None:
         manifests = graph_assets.get("manifests")
@@ -262,7 +262,7 @@ def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
             for manifest in manifests:
                 log.info(f"delete_graph_assets() manifest: {manifest}")
                 s3_path = manifest.get("path")
-                s3_key = f"{dataset_id}/{s3_path}"
+                s3_key = s3_key_path(dataset_id, s3_path)
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
         delete_object(log, s3_client, s3_bucket, s3_asset_key)
@@ -293,10 +293,10 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
 
     delete_object(log, s3_client, bucket_id, f"{dataset_id}/{FileActionKey}")
 
-def tidy_publication_directory(log, s3_client, s3_bucket_id, dataset_id):
-    log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} dataset_id: {dataset_id}")
+def tidy_publication_directory(log, s3_client, s3_bucket_id, s3_key_prefix):
+    log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} s3_key_prefix: {s3_key_prefix}")
     for file_name in PublishingIntermediateFiles:
-        s3_key = f"{dataset_id}/{file_name}"
+        s3_key = s3_key_path(s3_key_prefix, file_name)
         delete_all_object_versions(log, s3_client, s3_bucket_id, s3_key)
 
 def undo_copy(log, s3_client, file_action):
@@ -407,3 +407,7 @@ def delete_object(log, s3_client, s3_bucket, s3_key):
 
 def delete_object_version(s3_client, s3_bucket, s3_key, s3_version):
     s3_client.delete_object(Bucket=s3_bucket, Key=s3_key, VersionId=s3_version)
+
+def s3_key_path(prefix, suffix):
+    separator = "" if prefix.endswith("/") else "/"
+    return f"{prefix}{separator}{suffix}"
