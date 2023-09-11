@@ -200,10 +200,12 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
         delete_dataset_assets(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
         delete_graph_assets(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.dataset_id)
+        tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.s3_key_prefix)
         # Undo File Actions in the Embargo Bucket
         delete_dataset_assets(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
         delete_graph_assets(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.dataset_id)
+        tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.s3_key_prefix)
         # Clean up the Public Assets Bucket
         dataset_assets_prefix = '{}/{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id, s3_clean_config.dataset_version)
         delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
@@ -250,7 +252,6 @@ def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
                 s3_key = s3_key_path(dataset_id, s3_path)
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
-        delete_object(log, s3_client, s3_bucket, s3_asset_key)
 
 def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
     log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
@@ -265,7 +266,6 @@ def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
                 s3_key = s3_key_path(dataset_id, s3_path)
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
-        delete_object(log, s3_client, s3_bucket, s3_asset_key)
 
 def undo_actions(log, s3_client, bucket_id, dataset_id):
     log.info(f"undo_actions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
