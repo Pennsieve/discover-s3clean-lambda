@@ -101,7 +101,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         log.info('Reading environment')
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
-        tidy_enabled = os.environ.get("TIDY_ENABLED","FALSE").upper() == "TRUE"
+        tidy_enabled = os.environ.get("TIDY_ENABLED","TRUE").upper() == "TRUE"
 
         log.info('Parsing event')
 
