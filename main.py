@@ -19,6 +19,7 @@ class S3CleanConfig:
     workflow_id: int
     dataset_id: str
     dataset_version: str
+    tidy_enabled: bool
 
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
@@ -100,6 +101,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         log.info('Reading environment')
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
+        tidy_enabled = os.environ.get("TIDY_ENABLED","TRUE").upper() == "TRUE"
 
         log.info('Parsing event')
 
@@ -111,7 +113,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         dataset_id = event.get("published_dataset_id","-1")
         dataset_version = event.get("published_dataset_version", "-1")
 
-        s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version)
+        s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
 
         if workflow_id == 5:
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
@@ -180,9 +182,12 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
         return
 
     if s3_clean_config.cleanup_stage == CleanupStageTidy:
-        log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
-        tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.s3_key_prefix)
-        tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.s3_key_prefix)
+        if s3_clean_config.tidy_enabled:
+            log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
+            tidy_publication_directory(log, s3_client, s3_clean_config.publish_bucket_id, s3_clean_config.s3_key_prefix)
+            tidy_publication_directory(log, s3_client, s3_clean_config.embargo_bucket_id, s3_clean_config.s3_key_prefix)
+        else:
+            log.info(f"purge_v5() {CleanupStageTidy} ~> requested but disabled")
 
     if s3_clean_config.cleanup_stage == CleanupStageUnpublish:
         log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
