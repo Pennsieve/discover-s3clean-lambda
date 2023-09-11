@@ -19,6 +19,7 @@ resource "aws_lambda_function" "discover_s3clean_lambda_function" {
       TIER                      = var.tier
       ASSET_BUCKET              = data.terraform_remote_state.platform_infrastructure.outputs.discover_s3_bucket_id
       DATASET_ASSETS_KEY_PREFIX = data.terraform_remote_state.platform_infrastructure.outputs.discover_bucket_dataset_assets_key_prefix
+      TIDY_ENABLED              = var.tidy_enabled
     }
   }
 }

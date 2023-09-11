@@ -31,3 +31,7 @@ variable "timeout" {
 variable "memory_size" {
   default = "192"
 }
+
+variable "tidy_enabled" {
+  default = "true"
+}
