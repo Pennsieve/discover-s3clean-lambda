@@ -87,9 +87,25 @@ FileActionKeep = "KeepFile"
 FileActionDelete = "DeleteFile"
 FileActionUnknown = "Unknown"
 
+Default_TidyEnabled = True
+
 NoValue = "(none)"
 
 PublishingIntermediateFiles = ["file-actions.json", "graph.json", "outputs.json", "publish.json"]
+
+def str_to_bool(s):
+    if s is not None:
+        return s.upper() == "TRUE"
+    else:
+        return False
+
+def is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env):
+    if tidy_enabled_evt is not None:
+        return str_to_bool(tidy_enabled_evt)
+    elif tidy_enabled_env is not None:
+        return str_to_bool(tidy_enabled_env)
+    else:
+        return Default_TidyEnabled
 
 def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
     # Create basic Pennsieve log context
@@ -101,7 +117,7 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         log.info('Reading environment')
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
-        tidy_enabled = os.environ.get("TIDY_ENABLED","TRUE").upper() == "TRUE"
+        tidy_enabled_env = os.environ.get("TIDY_ENABLED","TRUE")
 
         log.info('Parsing event')
 
@@ -112,6 +128,9 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         workflow_id = int(event.get("workflow_id", "4"))
         dataset_id = event.get("published_dataset_id","-1")
         dataset_version = event.get("published_dataset_version", "-1")
+        tidy_enabled_evt = event.get("tidy_enabled")
+
+        tidy_enabled = is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env)
 
         s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
 
