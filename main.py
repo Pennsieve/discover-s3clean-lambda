@@ -231,8 +231,13 @@ def purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config):
         delete_all_versions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
 
     # Delete all files in the Public Assets Bucket
-    dataset_assets_prefix = '{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id)
-    delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
+    cleanup_public_assets_bucket(log,
+                                 s3_client,
+                                 s3_paginator,
+                                 s3_clean_config.asset_bucket_id,
+                                 s3_clean_config.assets_prefix,
+                                 s3_clean_config.dataset_id,
+                                 None)
 
 def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
     log.info(f"purge_v5_failure() undo publishing actions and clean public assets bucket")
@@ -244,8 +249,13 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
         tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
 
     # Clean up the Public Assets Bucket
-    dataset_assets_prefix = '{}/{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id, s3_clean_config.dataset_version)
-    delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
+    cleanup_public_assets_bucket(log,
+                                 s3_client,
+                                 s3_paginator,
+                                 s3_clean_config.asset_bucket_id,
+                                 s3_clean_config.assets_prefix,
+                                 s3_clean_config.dataset_id,
+                                 s3_clean_config.dataset_version)
 
 def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_revisions() {s3_clean_config.dataset_id}")
@@ -256,8 +266,6 @@ def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
         if len(file_actions) > 0:
             write_json_file_to_s3(log, s3_client, bucket_id, revisions_cleanup_key, json.dumps(file_actions))
 
-    return
-
 def cleanup_dataset_revisions_in_bucket(log, s3_client, bucket_id, dataset_id):
     log.info(f"cleanup_dataset_revisions_in_bucket() bucket_id: {bucket_id} dataset_id: {dataset_id}")
 
@@ -266,6 +274,11 @@ def cleanup_dataset_revisions_in_bucket(log, s3_client, bucket_id, dataset_id):
     file_action_list = [delete_file_version(log, s3_client, bucket_id, file) for file in file_list]
 
     return {FileActionListTag: file_action_list}
+
+def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id = None):
+    log.info(f"cleanup_public_assets_bucket() bucket_id: {bucket_id} prefix: {prefix} dataset_id: {dataset_id} version_id: {version_id}")
+    dataset_assets_prefix = public_assets_prefix(prefix, dataset_id, version_id)
+    delete(s3_client, s3_paginator, bucket_id, dataset_assets_prefix)
 
 def get_list_of_files(log, s3_client, bucket_id, prefix):
     log.info(f"get_list_of_files() bucket_id: {bucket_id} prefix: {prefix}")
@@ -385,8 +398,6 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
             undo_delete(log, s3_client, file_action)
         else:
             log.info(f"undo_actions() unsupported action: {action}")
-
-    #delete_object(log, s3_client, bucket_id, f"{dataset_id}/{FileActionKey}")
 
 def tidy_publication_directory(log, s3_client, s3_bucket_id, s3_key_prefix):
     log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} s3_key_prefix: {s3_key_prefix}")
@@ -540,6 +551,12 @@ def delete_object(log, s3_client, s3_bucket, s3_key):
 
 def delete_object_version(s3_client, s3_bucket, s3_key, s3_version):
     s3_client.delete_object(Bucket=s3_bucket, Key=s3_key, VersionId=s3_version)
+
+def public_assets_prefix(prefix, dataset_id, version_id):
+    if version_id is None:
+        return f"{prefix}/{dataset_id}"
+    else:
+        return f"{prefix}/{dataset_id}/{version_id}"
 
 def s3_key_path(prefix, suffix):
     separator = "" if prefix.endswith("/") else "/"
