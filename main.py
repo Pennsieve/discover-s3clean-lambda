@@ -198,46 +198,54 @@ def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
                 s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)
 
 def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
-    log.info(f"purge_v5() {s3_clean_config}")
+    log.info(f"purge_v5() {s3_clean_config.cleanup_stage} config: {s3_clean_config}")
 
     if s3_clean_config.cleanup_stage == CleanupStageInitial:
         purge_v5_initial(log, s3_client, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageTidy:
-        if s3_clean_config.tidy_enabled:
-            log.info(f"purge_v5() {CleanupStageTidy} ~> will remove intermediate publishing files")
-            for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-                tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
-        else:
-            log.info(f"purge_v5() {CleanupStageTidy} ~> requested but disabled")
+        purge_v5_tidy(log, s3_client, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageUnpublish:
-        log.info(f"purge_v5() {CleanupStageUnpublish} ~> will delete all versions of files")
-        for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-            delete_all_versions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-
-        # Delete all files in the Public Assets Bucket
-        dataset_assets_prefix = '{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id)
-        delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
+        purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageFailure:
-        log.info(f"purge_v5() {CleanupStageFailure} ~> will undo actions and clean public assets bucket")
-
-        for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-            delete_dataset_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-            delete_graph_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-            undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
-
-        # Clean up the Public Assets Bucket
-        dataset_assets_prefix = '{}/{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id, s3_clean_config.dataset_version)
-        delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
+        purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config)
 
 def purge_v5_initial(log, s3_client, s3_clean_config):
-    # do nothing on initial cleanup during publishing
-    log.info(f"purge_v5_initial() starting...")
+    log.info(f"purge_v5_initial() preparing space for publication")
     cleanup_dataset_revisions(log, s3_client, s3_clean_config)
-    return
+
+def purge_v5_tidy(log, s3_client, s3_clean_config):
+    if s3_clean_config.tidy_enabled:
+        log.info(f"purge_v5_tidy() removing intermediate publishing files")
+        for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+    else:
+        log.info(f"purge_v5_tidy() requested but disabled")
+
+def purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config):
+    log.info(f"purge_v5_unpublish() will remove all versions and all files")
+
+    for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
+        delete_all_versions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
+
+    # Delete all files in the Public Assets Bucket
+    dataset_assets_prefix = '{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id)
+    delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
+
+def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
+    log.info(f"purge_v5_failure() undo publishing actions and clean public assets bucket")
+
+    for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
+        delete_dataset_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
+        delete_graph_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
+        undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
+        tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+
+    # Clean up the Public Assets Bucket
+    dataset_assets_prefix = '{}/{}/{}'.format(s3_clean_config.assets_prefix, s3_clean_config.dataset_id, s3_clean_config.dataset_version)
+    delete(s3_client, s3_paginator, s3_clean_config.asset_bucket_id, dataset_assets_prefix)
 
 def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_revisions() {s3_clean_config.dataset_id}")
@@ -307,6 +315,14 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
         delete_object_version(s3_client, bucket_id, key, version)
 
 def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
+    '''
+    This function will remove versions of the dataset assets (banner, readme, manifest.json) that were copied to S3 as part of the publishing process.
+    :param log: logger
+    :param s3_client: an S3 client
+    :param s3_bucket: the name of the S3 Bucket
+    :param dataset_id: the published dataset id
+    :return: (none)
+    '''
     log.info(f"delete_dataset_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
     s3_asset_key = s3_key_path(dataset_id, DatasetAssetsKey)
     dataset_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
@@ -322,6 +338,14 @@ def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
 def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
+    '''
+    This will delete versions of the graph assets (schemas, models, records) that were copied to the S3 bucket.
+    :param log: logger
+    :param s3_client: an S3 client
+    :param s3_bucket: the name of the S3 bucket
+    :param dataset_id: the published dataset id
+    :return: (none)
+    '''
     log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
     s3_asset_key = s3_key_path(dataset_id, GraphAssetsKey)
     graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
@@ -336,6 +360,14 @@ def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
 def undo_actions(log, s3_client, bucket_id, dataset_id):
+    '''
+    This will undo the actions performed during the dataset publishing process. It will remove new files copied, and restore files that were deleted or replaced.
+    :param log: logger
+    :param s3_client: an S3 client
+    :param bucket_id: the name of the publishing S3 bucket
+    :param dataset_id: the published dataset id
+    :return: (none)
+    '''
     log.info(f"undo_actions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
 
     file_actions = load_dataset_file_actions(log, s3_client, bucket_id, dataset_id)
@@ -442,6 +474,14 @@ def write_json_file_to_s3(log, s3_client, bucket, key, json_data):
     # TODO: check response for success/failure
 
 def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
+    '''
+    General purpose function to read a JSON file from S3.
+    :param log: logger
+    :param s3_client: an S3 client
+    :param s3_bucket: the name of the S3 bucket
+    :param s3_key: S3 Key of the file
+    :return: JSON in dict() format
+    '''
     log.info(f"load_json_file_from_s3() s3_bucket: {s3_bucket} s3_key: {s3_key}")
     try:
         s3_object = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
@@ -456,10 +496,27 @@ def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
     return json_file
 
 def load_dataset_file_actions(log, s3_client, bucket_id, dataset_id):
+    '''
+    Loads files from the publishing S3 bucket that contain File Actions (copy, keep, delete), from publishing and revision cleanup.
+    :param log: logger
+    :param s3_client: an S3 client
+    :param bucket_id: the name of the S3 bucket
+    :param dataset_id: the published dataset id
+    :return: combined List of File Actions
+    '''
     return load_file_actions(log, s3_client, bucket_id, dataset_id, FileActionKey) + \
            load_file_actions(log, s3_client, bucket_id, dataset_id, RevisionsCleanupKey)
 
 def load_file_actions(log, s3_client, bucket_id, dataset_id, file_action_key):
+    '''
+    Loads a File Actions file from S3. The file contains a list File Actions serialized to JSON.
+    :param log: logger
+    :param s3_client: and S3 client
+    :param bucket_id: the name of the S3 bucket
+    :param dataset_id: the published dataset id
+    :param file_action_key: the S3 Key of the file to be loaded
+    :return: List of File Actions
+    '''
     s3_key = f"{dataset_id}/{file_action_key}"
     log.info(f"load_file_actions() bucket_id: {bucket_id} dataset_id: {dataset_id} s3_key: {s3_key}")
     json_data = load_json_file_from_s3(log, s3_client, bucket_id, s3_key)
