@@ -57,11 +57,12 @@ data "aws_iam_policy_document" "lambda_iam_policy_document" {
   }
 
   statement {
-    sid    = "S3ListGetDelete"
+    sid    = "S3ListGetPutDelete"
     effect = "Allow"
 
     actions = [
       "s3:GetObject",
+      "s3:PutObject",
       "s3:DeleteObject",
       "s3:ListBucket",
     ]
@@ -82,12 +83,13 @@ data "aws_iam_policy_document" "lambda_iam_policy_document" {
   }
 
   statement {
-    sid    = "S3ListGetDelete50"
+    sid    = "S3ListGetPutDelete50"
     effect = "Allow"
 
     actions = [
       "s3:GetObject",
       "s3:GetObjectVersion",
+      "s3:PutObject",
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
       "s3:ListBucket",
@@ -105,7 +107,6 @@ data "aws_iam_policy_document" "lambda_iam_policy_document" {
       "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_publish50_bucket_arn}/*",
       data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo50_bucket_arn,
       "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo50_bucket_arn}/*",
-
     ]
   }
 }
