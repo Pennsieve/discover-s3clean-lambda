@@ -78,6 +78,10 @@ DatasetAssetsKey = "publish.json"
 GraphAssetsKey = "graph.json"
 OutputAssetsKey = "outputs.json"
 RevisionsCleanupKey = "revisions-cleanup.json"
+MetadataCleanupKey = "model-metadata-cleanup.json"
+
+RevisionsPrefix = "revisions"
+MetadataPrefix = "metadata"
 
 FileActionTag = "action"
 FileActionBucketTag = "bucket"
@@ -95,7 +99,12 @@ Default_TidyEnabled = True
 
 NoValue = "(none)"
 
-PublishingIntermediateFiles = [FileActionKey, GraphAssetsKey, OutputAssetsKey, DatasetAssetsKey, RevisionsCleanupKey]
+PublishingIntermediateFiles = [FileActionKey,
+                               GraphAssetsKey,
+                               OutputAssetsKey,
+                               DatasetAssetsKey,
+                               RevisionsCleanupKey,
+                               MetadataCleanupKey]
 
 def str_to_bool(s):
     if s is not None:
@@ -215,6 +224,7 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
 def purge_v5_initial(log, s3_client, s3_clean_config):
     log.info(f"purge_v5_initial() preparing space for publication")
     cleanup_dataset_revisions(log, s3_client, s3_clean_config)
+    cleanup_dataset_metadata(log, s3_client, s3_clean_config)
 
 def purge_v5_tidy(log, s3_client, s3_clean_config):
     if s3_clean_config.tidy_enabled:
@@ -259,20 +269,29 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
 
 def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_revisions() {s3_clean_config.dataset_id}")
-    revisions_cleanup_key = f"{s3_clean_config.dataset_id}/{RevisionsCleanupKey}"
+    cleanup_file = f"{s3_clean_config.dataset_id}/{RevisionsCleanupKey}"
+    cleanup_in_buckets(log, s3_client, s3_clean_config, RevisionsPrefix, cleanup_file)
+
+def cleanup_dataset_metadata(log, s3_client, s3_clean_config):
+    log.info(f"cleanup_dataset_metadata() {s3_clean_config.dataset_id}")
+    cleanup_file = f"{s3_clean_config.dataset_id}/{MetadataCleanupKey}"
+    cleanup_in_buckets(log, s3_client, s3_clean_config, MetadataPrefix, cleanup_file)
+
+def cleanup_in_buckets(log, s3_client, s3_clean_config, prefix, cleanup_file):
+    log.info(f"cleanup_in_buckets() prefix: {prefix} cleanup_file: {cleanup_file}")
 
     for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-        file_actions = cleanup_dataset_revisions_in_bucket(log, s3_client, bucket_id, s3_clean_config.dataset_id)
+        log.info(f"cleanup_in_buckets() bucket_id: {bucket_id}")
+        file_actions = cleanup_in_bucket(log, s3_client, bucket_id, s3_clean_config.dataset_id, prefix)
         if len(file_actions) > 0:
-            write_json_file_to_s3(log, s3_client, bucket_id, revisions_cleanup_key, json.dumps(file_actions))
+            write_json_file_to_s3(log, s3_client, bucket_id, cleanup_key, json.dumps(file_actions))
 
-def cleanup_dataset_revisions_in_bucket(log, s3_client, bucket_id, dataset_id):
-    log.info(f"cleanup_dataset_revisions_in_bucket() bucket_id: {bucket_id} dataset_id: {dataset_id}")
+def cleanup_in_bucket(log, s3_client, bucket_id, dataset_id, prefix):
+    log.info(f"cleanup_in_bucket() bucket_id: {bucket_id} dataset_id: {dataset_id} prefix: {prefix}")
 
-    prefix = f"{dataset_id}/revisions"
-    file_list = get_list_of_files(log, s3_client, bucket_id, prefix)
+    key_prefix = f"{dataset_id}/{prefix}"
+    file_list = get_list_of_files(log, s3_client, bucket_id, key_prefix)
     file_action_list = [delete_file_version(log, s3_client, bucket_id, file) for file in file_list]
-
     return {FileActionListTag: file_action_list}
 
 def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id = None):
@@ -281,6 +300,14 @@ def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix
     delete(s3_client, s3_paginator, bucket_id, dataset_assets_prefix)
 
 def get_list_of_files(log, s3_client, bucket_id, prefix):
+    '''
+    Gets a list of files in the S3 Bucket with the prefix. Uses a Paginator.
+    :param log: a logger
+    :param s3_client: an S3 Client
+    :param bucket_id: the name of the S3 Bucket
+    :param prefix: the prefix for objects in the S3 Bucket
+    :return: a list of files, in AWS Response format (ETag, Key, Size, VersionId, IsLatest, etc.)
+    '''
     log.info(f"get_list_of_files() bucket_id: {bucket_id} prefix: {prefix}")
     paginator = s3_client.get_paginator('list_object_versions')
     return [file
@@ -288,6 +315,14 @@ def get_list_of_files(log, s3_client, bucket_id, prefix):
             for file in page.get("Versions", [])]
 
 def delete_file_version(log, s3_client, bucket_id, file):
+    '''
+    Deletes a file from S3.
+    :param log: a logger
+    :param s3_client: an S3 Client
+    :param bucket_id: the name of the S3 Bucket
+    :param file: the S3 Key of the object to be deleted
+    :return: a FileActionItem (action, bucket, path, versionId)
+    '''
     key = file.get("Key")
     version = file.get("VersionId")
     log.info(f"delete_file_version() bucket_id: {bucket_id} key: {key} version: {version}")
@@ -508,7 +543,7 @@ def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
 
 def load_dataset_file_actions(log, s3_client, bucket_id, dataset_id):
     '''
-    Loads files from the publishing S3 bucket that contain File Actions (copy, keep, delete), from publishing and revision cleanup.
+    Loads files from the publishing S3 bucket that contain FileActionItem (copy, keep, delete), from publishing and revision cleanup.
     :param log: logger
     :param s3_client: an S3 client
     :param bucket_id: the name of the S3 bucket
@@ -516,7 +551,8 @@ def load_dataset_file_actions(log, s3_client, bucket_id, dataset_id):
     :return: combined List of File Actions
     '''
     return load_file_actions(log, s3_client, bucket_id, dataset_id, FileActionKey) + \
-           load_file_actions(log, s3_client, bucket_id, dataset_id, RevisionsCleanupKey)
+           load_file_actions(log, s3_client, bucket_id, dataset_id, RevisionsCleanupKey) + \
+           load_file_actions(log, s3_client, bucket_id, dataset_id, MetadataCleanupKey)
 
 def load_file_actions(log, s3_client, bucket_id, dataset_id, file_action_key):
     '''
