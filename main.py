@@ -78,7 +78,7 @@ DatasetAssetsKey = "publish.json"
 GraphAssetsKey = "graph.json"
 OutputAssetsKey = "outputs.json"
 RevisionsCleanupKey = "revisions-cleanup.json"
-MetadataCleanupKey = "model-metadata-cleanup.json"
+MetadataCleanupKey = "metadata-cleanup.json"
 
 RevisionsPrefix = "revisions"
 MetadataPrefix = "metadata"
