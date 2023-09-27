@@ -87,6 +87,7 @@ FileActionTag = "action"
 FileActionBucketTag = "bucket"
 FileActionPathTag = "path"
 FileActionVersionTag = "versionId"
+FileActionRequiredFields = [FileActionTag, FileActionBucketTag, FileActionPathTag]
 
 FileActionListTag = "fileActionList"
 
@@ -253,10 +254,12 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
     log.info(f"purge_v5_failure() undo publishing actions and clean public assets bucket")
 
     for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
+        log.info(f"purge_v5_failure() undo publishing in bucket_id: {bucket_id}")
         delete_dataset_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         delete_graph_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-        tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+        if s3_clean_config.tidy_enabled:
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
 
     # Clean up the Public Assets Bucket
     cleanup_public_assets_bucket(log,
@@ -441,17 +444,22 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
     log.info(f"undo_actions() there are {len(file_actions)} file actions to undo")
 
     for file_action in file_actions:
-        # TODO: validate file_action (required: 4 fields)
-        log.info(f"undo_actions() file_action: {file_action}")
-        action = file_action.get(FileActionTag,FileActionUnknown)
-        if action == FileActionCopy:
-            undo_copy(log, s3_client, file_action)
-        elif action == FileActionKeep:
-            undo_keep(log, s3_client, file_action)
-        elif action == FileActionDelete:
-            undo_delete(log, s3_client, file_action)
+        if valid_file_action(file_action):
+            log.info(f"undo_actions() process file_action: {file_action}")
+            action = file_action.get(FileActionTag, FileActionUnknown)
+            if action == FileActionCopy:
+                undo_copy(log, s3_client, file_action)
+            elif action == FileActionKeep:
+                undo_keep(log, s3_client, file_action)
+            elif action == FileActionDelete:
+                undo_delete(log, s3_client, file_action)
+            else:
+                log.info(f"undo_actions() unsupported action: {action}")
         else:
-            log.info(f"undo_actions() unsupported action: {action}")
+            log.info(f"undo_actions() invalid file_action: {file_action}")
+
+def valid_file_action(file_action):
+    return all([field in file_action for field in FileActionRequiredFields])
 
 def tidy_publication_directory(log, s3_client, s3_bucket_id, s3_key_prefix):
     log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} s3_key_prefix: {s3_key_prefix}")
@@ -489,19 +497,22 @@ def undo_delete(log, s3_client, file_action):
 
 def restore_version(log, s3_client, s3_bucket, s3_key, s3_version):
     log.info(f"restore_version() bucket: {s3_bucket} key: {s3_key} version: {s3_version}")
-    execute = True
-    while execute:
-        versions = get_object_versions(s3_client, s3_bucket, s3_key)
-        latest = find_latest_version(versions)
-        latest_version = latest.get(S3VersionIdTag, NoValue)
-        if latest_version == s3_version:
-            # the latest version is the desired version, so we are done
-            log.info(f"restore_version() version {latest_version} is the latest")
-            execute = False
-        else:
-            # the latest version is not the desired version, so remove it and check again
-            log.info(f"restore_version() removing version: {latest_version}")
-            delete_object_version(s3_client, s3_bucket, s3_key, latest_version)
+    if s3_version is not None:
+        execute = True
+        while execute:
+            versions = get_object_versions(s3_client, s3_bucket, s3_key)
+            latest = find_latest_version(versions)
+            latest_version = latest.get(S3VersionIdTag, NoValue)
+            if latest_version == s3_version:
+                # the latest version is the desired version, so we are done
+                log.info(f"restore_version() version {latest_version} is the latest")
+                execute = False
+            else:
+                # the latest version is not the desired version, so remove it and check again
+                log.info(f"restore_version() removing version: {latest_version}")
+                delete_object_version(s3_client, s3_bucket, s3_key, latest_version)
+    else:
+        log.info(f"restore_version() cannot restore without a valid object version (bucket: {s3_bucket} key: {s3_key} version: {s3_version})")
 
 def get_object_versions(s3_client, s3_bucket, s3_key):
     response = s3_client.list_object_versions(Bucket=s3_bucket, Prefix=s3_key)
