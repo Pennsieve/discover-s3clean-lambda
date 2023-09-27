@@ -77,8 +77,8 @@ FileActionKey = "file-actions.json"
 DatasetAssetsKey = "publish.json"
 GraphAssetsKey = "graph.json"
 OutputAssetsKey = "outputs.json"
-RevisionsCleanupKey = "revisions-cleanup.json"
-MetadataCleanupKey = "metadata-cleanup.json"
+RevisionsCleanupKey = "cleanup-revisions.json"
+MetadataCleanupKey = "cleanup-metadata.json"
 
 RevisionsPrefix = "revisions"
 MetadataPrefix = "metadata"
@@ -299,15 +299,17 @@ def cleanup_in_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
     log.info(f"cleanup_in_buckets() key_prefix: {key_prefix} cleanup_file: {cleanup_file} bucket_list: {bucket_list}")
 
     for bucket_id in bucket_list:
-        log.info(f"cleanup_in_buckets() bucket_id: {bucket_id}")
+        log.info(f"cleanup_in_buckets() processing bucket_id: {bucket_id}")
         file_actions = cleanup_in_bucket(log, s3_client, bucket_id, key_prefix)
-        if len(file_actions) > 0 and cleanup_file is not None:
+        if file_actions is not None and len(file_actions.get(FileActionListTag, [])) > 0:
+            log.info(f"cleanup_in_buckets() bucket_id: {bucket_id} cleaned up {len(file_actions.get(FileActionListTag))} files")
             write_json_file_to_s3(log, s3_client, bucket_id, cleanup_file, json.dumps(file_actions))
 
 def cleanup_in_bucket(log, s3_client, bucket_id, key_prefix):
     log.info(f"cleanup_in_bucket() bucket_id: {bucket_id} key_prefix: {key_prefix}")
 
     file_list = get_list_of_files(log, s3_client, bucket_id, key_prefix)
+    log.info(f"cleanup_in_bucket() will delete {len(file_list)} file versions")
     file_action_list = [delete_file_version(log, s3_client, bucket_id, file) for file in file_list]
     return {FileActionListTag: file_action_list}
 
