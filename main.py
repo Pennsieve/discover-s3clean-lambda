@@ -269,27 +269,44 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
 
 def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_revisions() {s3_clean_config.dataset_id}")
-    cleanup_file = f"{s3_clean_config.dataset_id}/{RevisionsCleanupKey}"
-    cleanup_in_buckets(log, s3_client, s3_clean_config, RevisionsPrefix, cleanup_file)
+    cleanup_dataset_folders(log,
+                            s3_client,
+                            [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id],
+                            s3_clean_config.dataset_id,
+                            RevisionsPrefix,
+                            RevisionsCleanupKey)
 
 def cleanup_dataset_metadata(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_metadata() {s3_clean_config.dataset_id}")
-    cleanup_file = f"{s3_clean_config.dataset_id}/{MetadataCleanupKey}"
-    cleanup_in_buckets(log, s3_client, s3_clean_config, MetadataPrefix, cleanup_file)
+    cleanup_dataset_folders(log,
+                            s3_client,
+                            [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id],
+                            s3_clean_config.dataset_id,
+                            MetadataPrefix,
+                            MetadataCleanupKey)
 
-def cleanup_in_buckets(log, s3_client, s3_clean_config, prefix, cleanup_file):
-    log.info(f"cleanup_in_buckets() prefix: {prefix} cleanup_file: {cleanup_file}")
+def cleanup_dataset_folders(log, s3_client, bucket_list, dataset_id, folder_prefix, folder_cleanup_key):
+    log.info(f"cleanup_dataset_folders() dataset_id: {dataset_id} folder_prefix: {folder_prefix} folder_cleanup_key: {folder_cleanup_key} bucket_list: {bucket_list}")
+    key_prefix = f"{dataset_id}/{folder_prefix}"
+    cleanup_file = f"{dataset_id}/{folder_cleanup_key}" if folder_cleanup_key is not None else None
+    cleanup_in_buckets(log,
+                       s3_client,
+                       bucket_list,
+                       key_prefix,
+                       cleanup_file)
 
-    for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
+def cleanup_in_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
+    log.info(f"cleanup_in_buckets() key_prefix: {key_prefix} cleanup_file: {cleanup_file} bucket_list: {bucket_list}")
+
+    for bucket_id in bucket_list:
         log.info(f"cleanup_in_buckets() bucket_id: {bucket_id}")
-        file_actions = cleanup_in_bucket(log, s3_client, bucket_id, s3_clean_config.dataset_id, prefix)
-        if len(file_actions) > 0:
-            write_json_file_to_s3(log, s3_client, bucket_id, cleanup_key, json.dumps(file_actions))
+        file_actions = cleanup_in_bucket(log, s3_client, bucket_id, key_prefix)
+        if len(file_actions) > 0 and cleanup_file is not None:
+            write_json_file_to_s3(log, s3_client, bucket_id, cleanup_file, json.dumps(file_actions))
 
-def cleanup_in_bucket(log, s3_client, bucket_id, dataset_id, prefix):
-    log.info(f"cleanup_in_bucket() bucket_id: {bucket_id} dataset_id: {dataset_id} prefix: {prefix}")
+def cleanup_in_bucket(log, s3_client, bucket_id, key_prefix):
+    log.info(f"cleanup_in_bucket() bucket_id: {bucket_id} key_prefix: {key_prefix}")
 
-    key_prefix = f"{dataset_id}/{prefix}"
     file_list = get_list_of_files(log, s3_client, bucket_id, key_prefix)
     file_action_list = [delete_file_version(log, s3_client, bucket_id, file) for file in file_list]
     return {FileActionListTag: file_action_list}
