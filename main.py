@@ -313,7 +313,7 @@ def cleanup_in_bucket(log, s3_client, bucket_id, key_prefix):
 
     file_list = get_list_of_files(log, s3_client, bucket_id, key_prefix)
     log.info(f"cleanup_in_bucket() will delete {len(file_list)} file versions")
-    file_action_list = [delete_file_version(log, s3_client, bucket_id, file) for file in file_list]
+    file_action_list = [cleanup_file_version(log, s3_client, bucket_id, file) for file in file_list]
     return {FileActionListTag: file_action_list}
 
 def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id = None):
@@ -332,13 +332,14 @@ def get_list_of_files(log, s3_client, bucket_id, prefix):
     '''
     log.info(f"get_list_of_files() bucket_id: {bucket_id} prefix: {prefix}")
     paginator = s3_client.get_paginator('list_object_versions')
-    return [file
-            for page in paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
-            for file in page.get("Versions", [])]
+    bucket_listing = [file
+                      for page in paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
+                      for file in page.get("Versions", [])]
+    return bucket_listing
 
-def delete_file_version(log, s3_client, bucket_id, file):
+def cleanup_file_version(log, s3_client, bucket_id, file):
     '''
-    Deletes a file from S3.
+    Deletes a file from S3. Specifically used for cleaning up folders, with recovery action returned. This is not a general-purpose delete function.
     :param log: a logger
     :param s3_client: an S3 Client
     :param bucket_id: the name of the S3 Bucket
@@ -347,8 +348,8 @@ def delete_file_version(log, s3_client, bucket_id, file):
     '''
     key = file.get("Key")
     version = file.get("VersionId")
-    log.info(f"delete_file_version() bucket_id: {bucket_id} key: {key} version: {version}")
-    delete_object_version(s3_client, bucket_id, key, version)
+    log.info(f"cleanup_file_version() bucket_id: {bucket_id} key: {key} version: {version}")
+    delete_object(s3_client, bucket_id, key)
     return {
         "action": FileActionDelete,
         "bucket": bucket_id,
