@@ -151,7 +151,10 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         if workflow_id == 5:
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
-            purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
+            if cleanup_stage == CleanupStageTidy:
+                tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
+            else:
+                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
@@ -183,6 +186,15 @@ def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
     except Exception as e:
         log.error(e, exc_info=True)
         raise
+
+def tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix):
+    log.info(f"tidy_v4() tidy_enabled: {tidy_enabled} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix: {s3_key_prefix}")
+    if tidy_enabled:
+        log.info(f"tidy_v4() removing intermediate publishing files")
+        for bucket_id in [publish_bucket_id, embargo_bucket_id]:
+            tidy_publication_directory(log, s3_client, bucket_id, s3_key_prefix)
+    else:
+        log.info(f"tidy_v4() requested but disabled")
 
 def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
     requester_pays = {'RequestPayer': 'requester'} if is_requester_pays else {}
@@ -610,7 +622,10 @@ def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     for version in versions:
         s3_version = version.get(S3VersionIdTag)
         if s3_version is not None:
-            delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+            if s3_version == "null":
+                delete_object(log, s3_client, s3_bucket, s3_key)
+            else:
+                delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
 def delete_object(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_object() s3_bucket: {s3_bucket} s3_key: {s3_key}")
