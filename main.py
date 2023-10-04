@@ -151,7 +151,10 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         if workflow_id == 5:
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
-            purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
+            if cleanup_stage == CleanupStageTidy:
+                tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
+            else:
+                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
@@ -183,6 +186,15 @@ def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
     except Exception as e:
         log.error(e, exc_info=True)
         raise
+
+def tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix):
+    log.info(f"tidy_v4() tidy_enabled: {tidy_enabled} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix: {s3_key_prefix}")
+    if tidy_enabled:
+        log.info(f"tidy_v4() removing intermediate publishing files")
+        for bucket_id in [publish_bucket_id, embargo_bucket_id]:
+            tidy_publication_directory(log, s3_client, bucket_id, s3_key_prefix)
+    else:
+        log.info(f"tidy_v4() requested but disabled")
 
 def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
     requester_pays = {'RequestPayer': 'requester'} if is_requester_pays else {}
@@ -292,28 +304,28 @@ def cleanup_dataset_folders(log, s3_client, bucket_list, dataset_id, folder_pref
     log.info(f"cleanup_dataset_folders() dataset_id: {dataset_id} folder_prefix: {folder_prefix} folder_cleanup_key: {folder_cleanup_key} bucket_list: {bucket_list}")
     key_prefix = f"{dataset_id}/{folder_prefix}"
     cleanup_file = f"{dataset_id}/{folder_cleanup_key}" if folder_cleanup_key is not None else None
-    cleanup_in_buckets(log,
-                       s3_client,
-                       bucket_list,
-                       key_prefix,
-                       cleanup_file)
+    cleanup_buckets(log,
+                    s3_client,
+                    bucket_list,
+                    key_prefix,
+                    cleanup_file)
 
-def cleanup_in_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
-    log.info(f"cleanup_in_buckets() key_prefix: {key_prefix} cleanup_file: {cleanup_file} bucket_list: {bucket_list}")
+def cleanup_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
+    log.info(f"cleanup_buckets() key_prefix: {key_prefix} cleanup_file: {cleanup_file} bucket_list: {bucket_list}")
 
     for bucket_id in bucket_list:
-        log.info(f"cleanup_in_buckets() processing bucket_id: {bucket_id}")
-        file_actions = cleanup_in_bucket(log, s3_client, bucket_id, key_prefix)
+        log.info(f"cleanup_buckets() processing bucket_id: {bucket_id}")
+        file_actions = remove_files_from_bucket(log, s3_client, bucket_id, key_prefix)
         if file_actions is not None and len(file_actions.get(FileActionListTag, [])) > 0:
-            log.info(f"cleanup_in_buckets() bucket_id: {bucket_id} cleaned up {len(file_actions.get(FileActionListTag))} files")
+            log.info(f"cleanup_buckets() bucket_id: {bucket_id} cleaned up {len(file_actions.get(FileActionListTag))} files")
             write_json_file_to_s3(log, s3_client, bucket_id, cleanup_file, json.dumps(file_actions))
 
-def cleanup_in_bucket(log, s3_client, bucket_id, key_prefix):
-    log.info(f"cleanup_in_bucket() bucket_id: {bucket_id} key_prefix: {key_prefix}")
+def remove_files_from_bucket(log, s3_client, bucket_id, key_prefix):
+    log.info(f"remove_files_from_bucket() bucket_id: {bucket_id} key_prefix: {key_prefix}")
 
     file_list = get_list_of_files(log, s3_client, bucket_id, key_prefix)
-    log.info(f"cleanup_in_bucket() will delete {len(file_list)} file versions")
-    file_action_list = [cleanup_file_version(log, s3_client, bucket_id, file) for file in file_list]
+    log.info(f"remove_files_from_bucket() will delete {len(file_list)} files")
+    file_action_list = [remove_file(log, s3_client, bucket_id, file) for file in file_list]
     return {FileActionListTag: file_action_list}
 
 def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id = None):
@@ -323,33 +335,33 @@ def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix
 
 def get_list_of_files(log, s3_client, bucket_id, prefix):
     '''
-    Gets a list of files in the S3 Bucket with the prefix. Uses a Paginator.
+    Gets a list of current files in the S3 Bucket with the specified prefix. Uses a Paginator.
     :param log: a logger
     :param s3_client: an S3 Client
     :param bucket_id: the name of the S3 Bucket
-    :param prefix: the prefix for objects in the S3 Bucket
-    :return: a list of files, in AWS Response format (ETag, Key, Size, VersionId, IsLatest, etc.)
+    :param prefix: the S3 object prefix
+    :return: a list of current files (IsLatest == true), in AWS Response format (ETag, Key, Size, VersionId, IsLatest, etc.)
     '''
     log.info(f"get_list_of_files() bucket_id: {bucket_id} prefix: {prefix}")
     paginator = s3_client.get_paginator('list_object_versions')
     bucket_listing = [file
                       for page in paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
-                      for file in page.get("Versions", [])]
+                      for file in page.get("Versions", []) if file.get("IsLatest")]
     return bucket_listing
 
-def cleanup_file_version(log, s3_client, bucket_id, file):
+def remove_file(log, s3_client, bucket_id, file):
     '''
-    Deletes a file from S3. Specifically used for cleaning up folders, with recovery action returned. This is not a general-purpose delete function.
+    Deletes a current file from S3. Specifically used for cleaning up folders, a recovery action is returned. This is not a general-purpose delete function.
     :param log: a logger
     :param s3_client: an S3 Client
     :param bucket_id: the name of the S3 Bucket
-    :param file: the S3 Key of the object to be deleted
+    :param file: the S3 object to be deleted (must have a Key and VersionId)
     :return: a FileActionItem (action, bucket, path, versionId)
     '''
     key = file.get("Key")
     version = file.get("VersionId")
-    log.info(f"cleanup_file_version() bucket_id: {bucket_id} key: {key} version: {version}")
-    delete_object(s3_client, bucket_id, key)
+    log.info(f"remove_file() bucket_id: {bucket_id} key: {key} version: {version}")
+    delete_object(log, s3_client, bucket_id, key)
     return {
         "action": FileActionDelete,
         "bucket": bucket_id,
@@ -610,7 +622,10 @@ def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     for version in versions:
         s3_version = version.get(S3VersionIdTag)
         if s3_version is not None:
-            delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+            if s3_version == "null":
+                delete_object(log, s3_client, s3_bucket, s3_key)
+            else:
+                delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
 def delete_object(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_object() s3_bucket: {s3_bucket} s3_key: {s3_key}")
