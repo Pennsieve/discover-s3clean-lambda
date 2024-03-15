@@ -55,14 +55,15 @@ class S3Paginator:
 
 class S3Client:
     log = WithLogging.logger('S3Client')
-    s3 = boto3.client("s3")
+    s3 = None
     is_requestor_pays = True
     requestor_pays = None
 
-    def init(is_requestor_pays = True):
+    def init(endpoint_url = None, is_requestor_pays = True):
         S3Client.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
         S3Client.is_requestor_pays = is_requestor_pays
         S3Client.requestor_pays = RequestPayer(is_requestor_pays)
+        S3Client.s3 = boto3.client("s3", endpoint_url=endpoint_url)
 
     def get_paginator(operation_name):
         S3Client.log.info(f"get_paginator() operation_name: {operation_name}")
@@ -101,6 +102,9 @@ class S3Client:
                                              Key=Key,
                                              **S3Client.requestor_pays())
 
+    def delete_objects(Bucket, Delete, **kwargs):
+        S3Client.log.info(f"delete_objects() Bucket: {Bucket} number-of-items: {len(Delete)}")
+        return S3Client.s3.delete_objects(Bucket=Bucket, Delete=Delete, **S3Client.requestor_pays())
 
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
@@ -139,9 +143,6 @@ if ENVIRONMENT == 'local':
     S3_URL = 'http://localstack:4566'
 else:
     S3_URL = None
-
-S3_CLIENT = boto3.client('s3', endpoint_url=S3_URL)
-PAGINATOR = S3_CLIENT.get_paginator('list_objects_v2')
 
 S3DeleteMarkersTag = "DeleteMarkers"
 S3VersionsTag = "Versions"
@@ -229,15 +230,16 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
 
         s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
 
+        S3Client.init(endpoint_url=S3_URL, is_requestor_pays=True)
+        S3Paginator = S3Client.get_paginator('list_objects_v2')
+
         if workflow_id == 5:
-            S3Client.init(is_requestor_pays=True)
-            s3_paginator_lov2 = S3Client.get_paginator('list_objects_v2')
-            purge_v5(log, S3Client, s3_paginator_lov2, s3_clean_config)
+            purge_v5(log, S3Client, S3Paginator, s3_clean_config)
         else:
             if cleanup_stage == CleanupStageTidy:
-                tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
+                tidy_v4(log, tidy_enabled, S3Client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
             else:
-                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
+                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, S3Client, S3Paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
