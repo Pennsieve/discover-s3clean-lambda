@@ -144,6 +144,9 @@ if ENVIRONMENT == 'local':
 else:
     S3_URL = None
 
+S3Client.init(endpoint_url=S3_URL, is_requestor_pays=True)
+S3ClientPaginator = S3Client.get_paginator('list_objects_v2')
+
 S3DeleteMarkersTag = "DeleteMarkers"
 S3VersionsTag = "Versions"
 S3LastModifiedTag = "LastModified"
@@ -203,7 +206,7 @@ def is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env):
     else:
         return Default_TidyEnabled
 
-def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
+def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPaginator):
     # Create basic Pennsieve log context
     log = structlog.get_logger()
     log = log.bind(**{'class': f'{lambda_handler.__module__}.{lambda_handler.__name__}'})
@@ -230,16 +233,13 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
 
         s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
 
-        S3Client.init(endpoint_url=S3_URL, is_requestor_pays=True)
-        S3Paginator = S3Client.get_paginator('list_objects_v2')
-
         if workflow_id == 5:
-            purge_v5(log, S3Client, S3Paginator, s3_clean_config)
+            purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
             if cleanup_stage == CleanupStageTidy:
-                tidy_v4(log, tidy_enabled, S3Client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
+                tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
             else:
-                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, S3Client, S3Paginator)
+                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
