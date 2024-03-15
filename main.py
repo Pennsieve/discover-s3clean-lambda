@@ -21,6 +21,87 @@ class S3CleanConfig:
     dataset_version: str
     tidy_enabled: bool
 
+class WithLogging:
+    def logger(class_name):
+        log = structlog.get_logger()
+        log.bind(**{'class': class_name})
+        log.bind(pennsieve={'service_name': class_name})
+        return log
+
+class RequestPayer:
+    def __init__(self, is_requestor_pays = True):
+        self.is_requestor_pays = is_requestor_pays
+
+    def __call__(self):
+        return {'RequestPayer': 'requester'} if self.is_requestor_pays else {}
+
+class S3Paginator:
+    log = WithLogging.logger('S3Paginator')
+    s3 = boto3.client("s3")
+    paginator = None
+    requestor_pays = None
+
+    def init(paginator, is_requestor_pays = True):
+        S3Paginator.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
+        S3Paginator.requestor_pays = RequestPayer(is_requestor_pays)
+        S3Paginator.paginator = paginator
+
+    def paginate(Bucket, Prefix, PaginationConfig={'PageSize': 1000}, **kwargs):
+        S3Paginator.log.info(f"paginate() Bucket: {Bucket} Prefix: {Prefix} PaginationConfig: {PaginationConfig}")
+        return S3Paginator.paginator.paginate(Bucket=Bucket,
+                                              Prefix=Prefix,
+                                              PaginationConfig=PaginationConfig,
+                                              **S3Paginator.requestor_pays())
+
+class S3Client:
+    log = WithLogging.logger('S3Client')
+    s3 = boto3.client("s3")
+    is_requestor_pays = True
+    requestor_pays = None
+
+    def init(is_requestor_pays = True):
+        S3Client.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
+        S3Client.is_requestor_pays = is_requestor_pays
+        S3Client.requestor_pays = RequestPayer(is_requestor_pays)
+
+    def get_paginator(operation_name):
+        S3Client.log.info(f"get_paginator() operation_name: {operation_name}")
+        S3Paginator.init(S3Client.s3.get_paginator(operation_name),
+                         S3Client.is_requestor_pays)
+        return S3Paginator
+
+    def list_object_versions(Bucket, Prefix):
+        S3Client.log.info(f"list_object_versions() Bucket: {Bucket} Prefix: {Prefix}")
+        return S3Client.s3.list_object_versions(Bucket=Bucket,
+                                                Prefix=Prefix,
+                                                **S3Client.requestor_pays())
+
+    def put_object(Body, Bucket, Key):
+        S3Client.log.info(f"put_object() Bucket: {Bucket} Key: {Key}")
+        return S3Client.s3.put_object(Body=Body,
+                                      Bucket=Bucket,
+                                      Key=Key,
+                                      **S3Client.requestor_pays())
+
+    def get_object(Bucket, Key):
+        S3Client.log.info(f"get_object() Bucket: {Bucket} Key: {Key}")
+        return S3Client.s3.get_object(Bucket=Bucket,
+                                      Key=Key,
+                                      **S3Client.requestor_pays())
+
+    def delete_object(Bucket, Key, VersionId=None):
+        S3Client.log.info(f"delete_object() Bucket: {Bucket} Key: {Key} VersionId: {VersionId}")
+        if VersionId is not None:
+            return S3Client.s3.delete_object(Bucket=Bucket,
+                                             Key=Key,
+                                             VersionId=VersionId,
+                                             **S3Client.requestor_pays())
+        else:
+            return S3Client.s3.delete_object(Bucket=Bucket,
+                                             Key=Key,
+                                             **S3Client.requestor_pays())
+
+
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
 def rewrite_event_to_message(logger, name, event_dict):
@@ -149,7 +230,9 @@ def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
         s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
 
         if workflow_id == 5:
-            purge_v5(log, s3_client, s3_paginator, s3_clean_config)
+            S3Client.init(is_requestor_pays=True)
+            s3_paginator_lov2 = S3Client.get_paginator('list_objects_v2')
+            purge_v5(log, S3Client, s3_paginator_lov2, s3_clean_config)
         else:
             if cleanup_stage == CleanupStageTidy:
                 tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
