@@ -21,6 +21,91 @@ class S3CleanConfig:
     dataset_version: str
     tidy_enabled: bool
 
+class WithLogging:
+    def logger(class_name):
+        log = structlog.get_logger()
+        log.bind(**{'class': class_name})
+        log.bind(pennsieve={'service_name': class_name})
+        return log
+
+class RequestPayer:
+    def __init__(self, is_requestor_pays = True):
+        self.is_requestor_pays = is_requestor_pays
+
+    def __call__(self):
+        return {'RequestPayer': 'requester'} if self.is_requestor_pays else {}
+
+class S3Paginator:
+    log = WithLogging.logger('S3Paginator')
+    s3 = boto3.client("s3")
+    paginator = None
+    requestor_pays = None
+
+    def init(paginator, is_requestor_pays = True):
+        S3Paginator.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
+        S3Paginator.requestor_pays = RequestPayer(is_requestor_pays)
+        S3Paginator.paginator = paginator
+
+    def paginate(Bucket, Prefix, PaginationConfig={'PageSize': 1000}, **kwargs):
+        S3Paginator.log.info(f"paginate() Bucket: {Bucket} Prefix: {Prefix} PaginationConfig: {PaginationConfig}")
+        return S3Paginator.paginator.paginate(Bucket=Bucket,
+                                              Prefix=Prefix,
+                                              PaginationConfig=PaginationConfig,
+                                              **S3Paginator.requestor_pays())
+
+class S3Client:
+    log = WithLogging.logger('S3Client')
+    s3 = None
+    is_requestor_pays = True
+    requestor_pays = None
+
+    def init(endpoint_url = None, is_requestor_pays = True):
+        S3Client.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
+        S3Client.is_requestor_pays = is_requestor_pays
+        S3Client.requestor_pays = RequestPayer(is_requestor_pays)
+        S3Client.s3 = boto3.client("s3", endpoint_url=endpoint_url)
+
+    def get_paginator(operation_name):
+        S3Client.log.info(f"get_paginator() operation_name: {operation_name}")
+        S3Paginator.init(S3Client.s3.get_paginator(operation_name),
+                         S3Client.is_requestor_pays)
+        return S3Paginator
+
+    def list_object_versions(Bucket, Prefix):
+        S3Client.log.info(f"list_object_versions() Bucket: {Bucket} Prefix: {Prefix}")
+        return S3Client.s3.list_object_versions(Bucket=Bucket,
+                                                Prefix=Prefix,
+                                                **S3Client.requestor_pays())
+
+    def put_object(Body, Bucket, Key):
+        S3Client.log.info(f"put_object() Bucket: {Bucket} Key: {Key}")
+        return S3Client.s3.put_object(Body=Body,
+                                      Bucket=Bucket,
+                                      Key=Key,
+                                      **S3Client.requestor_pays())
+
+    def get_object(Bucket, Key):
+        S3Client.log.info(f"get_object() Bucket: {Bucket} Key: {Key}")
+        return S3Client.s3.get_object(Bucket=Bucket,
+                                      Key=Key,
+                                      **S3Client.requestor_pays())
+
+    def delete_object(Bucket, Key, VersionId=None):
+        S3Client.log.info(f"delete_object() Bucket: {Bucket} Key: {Key} VersionId: {VersionId}")
+        if VersionId is not None:
+            return S3Client.s3.delete_object(Bucket=Bucket,
+                                             Key=Key,
+                                             VersionId=VersionId,
+                                             **S3Client.requestor_pays())
+        else:
+            return S3Client.s3.delete_object(Bucket=Bucket,
+                                             Key=Key,
+                                             **S3Client.requestor_pays())
+
+    def delete_objects(Bucket, Delete, **kwargs):
+        S3Client.log.info(f"delete_objects() Bucket: {Bucket} number-of-items: {len(Delete)}")
+        return S3Client.s3.delete_objects(Bucket=Bucket, Delete=Delete, **S3Client.requestor_pays())
+
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
 def rewrite_event_to_message(logger, name, event_dict):
@@ -59,8 +144,8 @@ if ENVIRONMENT == 'local':
 else:
     S3_URL = None
 
-S3_CLIENT = boto3.client('s3', endpoint_url=S3_URL)
-PAGINATOR = S3_CLIENT.get_paginator('list_objects_v2')
+S3Client.init(endpoint_url=S3_URL, is_requestor_pays=True)
+S3ClientPaginator = S3Client.get_paginator('list_objects_v2')
 
 S3DeleteMarkersTag = "DeleteMarkers"
 S3VersionsTag = "Versions"
@@ -121,7 +206,7 @@ def is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env):
     else:
         return Default_TidyEnabled
 
-def lambda_handler(event, context, s3_client=S3_CLIENT, s3_paginator=PAGINATOR):
+def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPaginator):
     # Create basic Pennsieve log context
     log = structlog.get_logger()
     log = log.bind(**{'class': f'{lambda_handler.__module__}.{lambda_handler.__name__}'})
