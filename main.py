@@ -213,6 +213,7 @@ def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPagi
     log = log.bind(pennsieve={'service_name': FULL_SERVICE_NAME})
 
     try:
+        log.info(f"boto3 version: {boto3.__version__}")
         log.info('Reading environment')
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
