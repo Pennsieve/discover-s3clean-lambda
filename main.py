@@ -164,6 +164,7 @@ GraphAssetsKey = "graph.json"
 OutputAssetsKey = "outputs.json"
 RevisionsCleanupKey = "cleanup-revisions.json"
 MetadataCleanupKey = "cleanup-metadata.json"
+ReleaseAssetsListing = "release-asset-listing.json"
 
 RevisionsPrefix = "revisions"
 MetadataPrefix = "metadata"
@@ -190,7 +191,8 @@ PublishingIntermediateFiles = [FileActionKey,
                                OutputAssetsKey,
                                DatasetAssetsKey,
                                RevisionsCleanupKey,
-                               MetadataCleanupKey]
+                               MetadataCleanupKey,
+                               ReleaseAssetsListing]
 
 def str_to_bool(s):
     if s is not None:
