@@ -52,3 +52,15 @@ data "aws_s3_bucket_object" "s3_bucket_object" {
   bucket = var.bucket
   key    = "${var.service_name}-${var.tier}/${var.service_name}-${var.tier}-${var.version_number}.zip"
 }
+
+// AFS1 Region
+# AFS-1 Region
+data "terraform_remote_state" "africa_south_region" {
+  backend = "s3"
+
+  config = {
+    bucket = "${var.aws_account}-terraform-state"
+    key    = "aws/af-south-1/terraform.tfstate"
+    region = "af-south-1"
+  }
+}
