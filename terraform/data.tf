@@ -54,7 +54,6 @@ data "aws_s3_bucket_object" "s3_bucket_object" {
 }
 
 // AFS1 Region
-# AFS-1 Region
 data "terraform_remote_state" "africa_south_region" {
   backend = "s3"
 
