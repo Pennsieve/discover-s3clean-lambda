@@ -1,4 +1,4 @@
-FROM amazonlinux:latest as build
+FROM amazonlinux:latest AS build
 
 RUN yum -y install git \
     findutils \
@@ -8,7 +8,7 @@ RUN yum -y install git \
     unzip && \
     yum clean all
 
-RUN python3 -m pip install boto3==1.9.42
+RUN python3 -m pip install boto3==1.40.21
 
 WORKDIR lambda
 RUN mkdir bin
@@ -21,7 +21,7 @@ COPY main.py .
 RUN zip -r lambda.zip .
 
 
-FROM amazonlinux:latest as test
+FROM amazonlinux:latest AS test
 
 RUN yum -y install git \
     findutils \
@@ -30,7 +30,7 @@ RUN yum -y install git \
     zip && \
     yum clean all
 
-RUN python3 -m pip install boto3==1.9.42
+RUN python3 -m pip install boto3==1.40.21
 
 WORKDIR lambda
 

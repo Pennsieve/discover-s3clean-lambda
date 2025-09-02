@@ -11,15 +11,15 @@ PACKAGE_NAME  ?= ${PACKAGE_BASE}-${VERSION}.zip
 PACKAGE_ZIP   ?= $(WORKING_DIR)/$(PACKAGE_NAME)
 
 clean:
-	docker-compose down --volumes
+	docker compose down --volumes
 
 test:
 	@echo "Testing..."
-	docker-compose stop
-	docker-compose rm -f
-	docker-compose build test
-	docker-compose up --exit-code-from test test
-	docker-compose stop
+	docker compose stop
+	docker compose rm -f
+	docker compose build test
+	docker compose up --exit-code-from test test
+	docker compose stop
 
 package:
 	@echo "Building lambda..."

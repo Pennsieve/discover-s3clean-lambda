@@ -225,7 +225,7 @@ def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPagi
 
         publish_bucket_id = event['publish_bucket']
         embargo_bucket_id = event['embargo_bucket']
-        s3_key_prefix = event['s3_key_prefix']
+        s3_key_prefix = event.get('s3_key_prefix', "-1")
         cleanup_stage = event.get("cleanup_stage", CleanupStageInitial)
         workflow_id = int(event.get("workflow_id", "4"))
         dataset_id = event.get("published_dataset_id","-1")

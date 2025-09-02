@@ -2,20 +2,21 @@ import boto3
 import os
 import pytest
 import time
-from main import lambda_handler, S3_URL
+from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
+    MetadataCleanupKey
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
 ASSET_BUCKET = 'test-discover-assets'
 DATASET_ASSETS_KEY_PREFIX = 'dataset-assets'
 
-# This key corresponds to assets belonging to a dataset version
-# that has either been unpublished or was not published successfully
-S3_PREFIX_TO_DELETE = '1/10'
+# This key corresponds to assets belonging to a dataset
+# that is either being unpublished or was not published successfully
+S3_PREFIX_TO_DELETE = '11'
 
 # This key corresponds to assets belonging to a dataset version
 # that should remain untouched by this lambda function
-S3_PREFIX_TO_KEEP = '1/100'
+S3_PREFIX_TO_KEEP = '111'
 
 # This is a dummy file
 FILENAME = 'test.txt'
@@ -56,9 +57,9 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
     embargo_bucket.upload_file(Filename=FILENAME, Key=s3_key_to_keep)
     asset_bucket.upload_file(Filename=FILENAME, Key=asset_key_to_keep)
 
-    assert s3_keys(publish_bucket) == [s3_key_to_keep]
-    assert s3_keys(embargo_bucket) == [s3_key_to_keep]
-    assert s3_keys(asset_bucket) == [asset_key_to_keep]
+    assert s3_keys(publish_bucket) == {s3_key_to_keep}
+    assert s3_keys(embargo_bucket) == {s3_key_to_keep}
+    assert s3_keys(asset_bucket) == {asset_key_to_keep}
 
     # RUN LAMBDA
     lambda_handler({
@@ -68,9 +69,9 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
     }, {})
 
     # VERIFY RESULTS
-    assert s3_keys(publish_bucket) == [s3_key_to_keep]
-    assert s3_keys(embargo_bucket) == [s3_key_to_keep]
-    assert s3_keys(asset_bucket) == [asset_key_to_keep]
+    assert s3_keys(publish_bucket) == {s3_key_to_keep}
+    assert s3_keys(embargo_bucket) == {s3_key_to_keep}
+    assert s3_keys(asset_bucket) == {asset_key_to_keep}
 
 
 def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_bucket):
@@ -90,9 +91,9 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
 
     expected_keys = s3_keys_to_delete
     expected_keys.append(s3_key_to_keep)
-    assert sorted(s3_keys(publish_bucket)) == sorted(expected_keys)
-    assert sorted(s3_keys(embargo_bucket)) == sorted(expected_keys)
-    assert s3_keys(asset_bucket) == [asset_key_to_delete, asset_key_to_keep]
+    assert s3_keys(publish_bucket) == set(expected_keys)
+    assert s3_keys(embargo_bucket) == set(expected_keys)
+    assert s3_keys(asset_bucket) == {asset_key_to_delete, asset_key_to_keep}
 
     # RUN LAMBDA
     lambda_handler({
@@ -102,9 +103,9 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
     }, {})
 
     # VERIFY RESULTS
-    assert s3_keys(publish_bucket) == [s3_key_to_keep]
-    assert s3_keys(embargo_bucket) == [s3_key_to_keep]
-    assert s3_keys(asset_bucket) == [asset_key_to_keep]
+    assert s3_keys(publish_bucket) == {s3_key_to_keep}
+    assert s3_keys(embargo_bucket) == {s3_key_to_keep}
+    assert s3_keys(asset_bucket) == {asset_key_to_keep}
 
 
 def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_bucket):
@@ -121,22 +122,22 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
     embargo_bucket.upload_file(Filename=FILENAME, Key=s3_key_to_keep)
     asset_bucket.upload_file(Filename=FILENAME, Key=asset_key_to_keep)
 
-    expected_keys = [s3_key_to_delete, s3_key_to_keep]
+    expected_keys = {s3_key_to_delete, s3_key_to_keep}
     assert s3_keys(publish_bucket) == expected_keys
     assert s3_keys(embargo_bucket) == expected_keys
-    assert s3_keys(asset_bucket) == [asset_key_to_delete, asset_key_to_keep]
+    assert s3_keys(asset_bucket) == {asset_key_to_delete, asset_key_to_keep}
 
     # RUN LAMBDA
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE + "/",
         'publish_bucket': PUBLISH_BUCKET,
-        'embargo_bucket': EMBARGO_BUCKET
+        'embargo_bucket': EMBARGO_BUCKET,
     }, {})
 
     # VERIFY RESULTS
-    assert s3_keys(publish_bucket) == [s3_key_to_keep]
-    assert s3_keys(embargo_bucket) == [s3_key_to_keep]
-    assert s3_keys(asset_bucket) == [asset_key_to_keep]
+    assert s3_keys(publish_bucket) == {s3_key_to_keep}
+    assert s3_keys(embargo_bucket) == {s3_key_to_keep}
+    assert s3_keys(asset_bucket) == {asset_key_to_keep}
 
 
 def test_include_requestor_pays():
@@ -147,6 +148,60 @@ def test_include_requestor_pays():
     }, {}, s3_client=MockClient(), s3_paginator=MockPaginator())
 
 
+def test_cleanup_state_initial(publish_bucket, embargo_bucket, asset_bucket):
+    revision_key_to_delete = '{}/{}/{}'.format(S3_PREFIX_TO_DELETE, RevisionsPrefix, FILENAME)
+    other_dataset_revision_key_to_keep = '{}/{}/{}'.format(S3_PREFIX_TO_KEEP, RevisionsPrefix, FILENAME)
+
+    metadata_key_to_delete = '{}/{}/{}'.format(S3_PREFIX_TO_DELETE, MetadataPrefix, FILENAME)
+    other_dataset_metadata_key_to_keep = '{}/{}/{}'.format(S3_PREFIX_TO_KEEP, MetadataPrefix, FILENAME)
+
+    # files outside of revisions and metadata should be untouched in the initial cleanup stage
+    file_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
+
+    publish_bucket.upload_file(Filename=FILENAME, Key=file_key_to_keep)
+    embargo_bucket.upload_file(Filename=FILENAME, Key=file_key_to_keep)
+
+    publish_bucket.upload_file(Filename=FILENAME, Key=revision_key_to_delete)
+    publish_bucket.upload_file(Filename=FILENAME, Key=other_dataset_revision_key_to_keep)
+    publish_bucket.upload_file(Filename=FILENAME, Key=metadata_key_to_delete)
+    publish_bucket.upload_file(Filename=FILENAME, Key=other_dataset_metadata_key_to_keep)
+
+    embargo_bucket.upload_file(Filename=FILENAME, Key=revision_key_to_delete)
+    embargo_bucket.upload_file(Filename=FILENAME, Key=other_dataset_revision_key_to_keep)
+    embargo_bucket.upload_file(Filename=FILENAME, Key=metadata_key_to_delete)
+    embargo_bucket.upload_file(Filename=FILENAME, Key=other_dataset_metadata_key_to_keep)
+
+    pre_clean_expected_keys = {
+        revision_key_to_delete,
+        other_dataset_revision_key_to_keep,
+        metadata_key_to_delete,
+        other_dataset_metadata_key_to_keep,
+        file_key_to_keep
+    }
+    assert s3_keys(publish_bucket) == pre_clean_expected_keys
+    assert s3_keys(embargo_bucket) == pre_clean_expected_keys
+
+    # RUN LAMBDA
+    lambda_handler({
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': 5,
+        'cleanup_stage': CleanupStageInitial
+    }, {})
+
+    post_clean_expected_keys = {
+        other_dataset_revision_key_to_keep,
+        other_dataset_metadata_key_to_keep,
+        file_key_to_keep,
+        '{}/{}'.format(S3_PREFIX_TO_DELETE, RevisionsCleanupKey),
+        '{}/{}'.format(S3_PREFIX_TO_DELETE, MetadataCleanupKey),
+    }
+
+    assert s3_keys(publish_bucket) == post_clean_expected_keys
+    assert s3_keys(embargo_bucket) == post_clean_expected_keys
+
+
 def setup_bucket(bucket_name):
     s3_resource.create_bucket(Bucket=bucket_name)
     bucket = s3_resource.Bucket(bucket_name)
@@ -155,7 +210,7 @@ def setup_bucket(bucket_name):
 
 
 def s3_keys(bucket):
-    return [obj.key for obj in bucket.objects.all()]
+    return {obj.key for obj in bucket.objects.all()}
 
 
 def create_keys(prefix, filename):
@@ -184,5 +239,5 @@ class MockPaginator:
         page_size = kwargs['PaginationConfig']['PageSize']
         keys = create_keys(prefix, FILENAME)
         for i in range(0, len(keys), page_size):
-            key_maps = [{'Key': k} for k in keys[i:i+page_size]]
+            key_maps = [{'Key': k} for k in keys[i:i + page_size]]
             yield dict(Contents=key_maps)
