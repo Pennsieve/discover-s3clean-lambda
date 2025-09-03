@@ -3,7 +3,7 @@ import os
 import pytest
 import time
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
-    MetadataCleanupKey
+    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -28,7 +28,7 @@ s3_resource = boto3.resource('s3', endpoint_url=S3_URL)
 def setup():
     os.environ.update({
         'ASSET_BUCKET': ASSET_BUCKET,
-        'DATASET_ASSETS_KEY_PREFIX': DATASET_ASSETS_KEY_PREFIX
+        'DATASET_ASSETS_KEY_PREFIX': DATASET_ASSETS_KEY_PREFIX,
     })
 
     time.sleep(5)  # let localstack spin up
@@ -36,17 +36,17 @@ def setup():
 
 @pytest.fixture(scope='function')
 def publish_bucket(setup):
-    return setup_bucket(PUBLISH_BUCKET)
+    return setup_bucket(PUBLISH_BUCKET, is_versioned=True)
 
 
 @pytest.fixture(scope='function')
 def embargo_bucket(setup):
-    return setup_bucket(EMBARGO_BUCKET)
+    return setup_bucket(EMBARGO_BUCKET, is_versioned=False)
 
 
 @pytest.fixture(scope='function')
 def asset_bucket(setup):
-    return setup_bucket(ASSET_BUCKET)
+    return setup_bucket(ASSET_BUCKET, is_versioned=False)
 
 
 def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
@@ -144,11 +144,11 @@ def test_include_requestor_pays():
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
-        'embargo_bucket': EMBARGO_BUCKET
+        'embargo_bucket': EMBARGO_BUCKET,
     }, {}, s3_client=MockClient(), s3_paginator=MockPaginator())
 
 
-def test_cleanup_state_initial(publish_bucket, embargo_bucket, asset_bucket):
+def test_cleanup_state_initial(publish_bucket, embargo_bucket):
     revision_key_to_delete = '{}/{}/{}'.format(S3_PREFIX_TO_DELETE, RevisionsPrefix, FILENAME)
     other_dataset_revision_key_to_keep = '{}/{}/{}'.format(S3_PREFIX_TO_KEEP, RevisionsPrefix, FILENAME)
 
@@ -186,7 +186,7 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket, asset_bucket):
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
-        'workflow_id': 5,
+        'workflow_id': '5',
         'cleanup_stage': CleanupStageInitial
     }, {})
 
@@ -202,10 +202,91 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(embargo_bucket) == post_clean_expected_keys
 
 
-def setup_bucket(bucket_name):
+def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
+    intermediate_keys_to_delete = ['{}/{}'.format(S3_PREFIX_TO_DELETE, x) for x in PublishingIntermediateFiles]
+    intermediate_keys_to_keep = ['{}/{}'.format(S3_PREFIX_TO_KEEP, x) for x in PublishingIntermediateFiles]
+
+    # a key in the dataset being cleaned that tidy should ignore
+    untouched_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
+
+    for key in intermediate_keys_to_keep:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+        embargo_bucket.upload_file(Filename=FILENAME, Key=key)
+    for key in intermediate_keys_to_delete:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+        embargo_bucket.upload_file(Filename=FILENAME, Key=key)
+
+    publish_bucket.upload_file(FILENAME, untouched_key)
+    embargo_bucket.upload_file(FILENAME, untouched_key)
+
+    pre_clean_expected_keys = set(intermediate_keys_to_keep + intermediate_keys_to_delete + [untouched_key])
+    assert s3_keys(publish_bucket) == pre_clean_expected_keys
+    assert s3_keys(embargo_bucket) == pre_clean_expected_keys
+
+    # RUN LAMBDA
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageTidy
+    }, {})
+
+    post_clean_expected_keys = set(intermediate_keys_to_keep + [untouched_key])
+
+    assert s3_keys(publish_bucket) == post_clean_expected_keys
+    assert s3_keys(embargo_bucket) == post_clean_expected_keys
+
+
+def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
+    keys_to_delete = create_keys(S3_PREFIX_TO_DELETE, FILENAME, count=5) + create_keys(
+        '{}/{}'.format(S3_PREFIX_TO_DELETE, 'files'), FILENAME, count=7)
+    keys_to_keep = create_keys(S3_PREFIX_TO_KEEP, FILENAME, count=3) + create_keys(
+        '{}/{}'.format(S3_PREFIX_TO_KEEP, 'files'), FILENAME, count=2)
+
+    # Version 1
+    for key in keys_to_keep:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+        embargo_bucket.upload_file(Filename=FILENAME, Key=key)
+    for key in keys_to_delete:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+        embargo_bucket.upload_file(Filename=FILENAME, Key=key)
+
+    # Version 2
+    for key in keys_to_keep:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+    for key in keys_to_delete:
+        publish_bucket.upload_file(Filename=FILENAME, Key=key)
+
+    pre_clean_expected_keys = set(keys_to_keep + keys_to_delete)
+    assert s3_keys(publish_bucket) == pre_clean_expected_keys
+    assert s3_keys(embargo_bucket) == pre_clean_expected_keys
+
+    # RUN LAMBDA
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageUnpublish
+    }, {})
+
+    post_clean_expected_keys = set(keys_to_keep)
+    assert s3_keys(publish_bucket) == post_clean_expected_keys
+    assert s3_keys(embargo_bucket) == post_clean_expected_keys
+
+    # verify there are no versions hidden under delete markers
+    for key in keys_to_delete:
+        assert len(list(publish_bucket.object_versions.filter(Prefix=key))) == 0
+
+
+def setup_bucket(bucket_name, is_versioned):
     s3_resource.create_bucket(Bucket=bucket_name)
     bucket = s3_resource.Bucket(bucket_name)
-    bucket.objects.all().delete()
+    bucket.object_versions.all().delete()
+    if is_versioned:
+        s3_resource.BucketVersioning(bucket_name).enable()
     return bucket
 
 
@@ -213,8 +294,9 @@ def s3_keys(bucket):
     return {obj.key for obj in bucket.objects.all()}
 
 
-def create_keys(prefix, filename):
-    i = range(1, 1201)
+def create_keys(prefix, filename, count=None):
+    range_max = 1201 if count is None else count
+    i = range(1, range_max)
     return list(map(lambda x: '{}/{}{}'.format(prefix, x, filename), i))
 
 
