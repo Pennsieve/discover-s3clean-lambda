@@ -2,8 +2,21 @@ import boto3
 import os
 import pytest
 import time
+
+# When running 'make test', these env vars are set by Docker in the docker-compose file.
+# This block is here for the case where a dev would like to run the tests directly instead
+# of in Docker. This needs to be before the first import from main, since main will fail to
+# load if they are not set.
+#
+# To run the tests in your IDE, first start localstack however you like, making sure to expose port 4566 and passing
+# it the env var SERVICES=s3. Then you can run pytest -s test.py or just run tests individually in your IDE.
+if 'ENVIRONMENT' not in os.environ:
+    os.environ['ENVIRONMENT'] = 'local'
+    os.environ['SERVICE_NAME'] = 'discover'
+    os.environ['TIER'] = 's3clean'
+
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
-    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish
+    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, S3ClientPaginator
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -262,6 +275,21 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == pre_clean_expected_keys
     assert s3_keys(embargo_bucket) == pre_clean_expected_keys
 
+    # Assets too
+    assets_to_delete = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, 1), FILENAME,
+                                   count=4) + create_keys(
+        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, 2), FILENAME,
+        count=4)
+
+    assets_to_keep = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_KEEP, 1), FILENAME,
+                                 count=4) + create_keys(
+        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_KEEP, 2), FILENAME,
+        count=4)
+    for key in assets_to_delete + assets_to_keep:
+        asset_bucket.upload_file(Filename=FILENAME, Key=key)
+
+    assert s3_keys(asset_bucket) == set(assets_to_keep + assets_to_delete)
+
     # RUN LAMBDA
     lambda_handler({
         's3_key_prefix': S3_PREFIX_TO_DELETE,
@@ -279,6 +307,8 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
     # verify there are no versions hidden under delete markers
     for key in keys_to_delete:
         assert len(list(publish_bucket.object_versions.filter(Prefix=key))) == 0
+
+    assert s3_keys(asset_bucket) == set(assets_to_keep)
 
 
 def setup_bucket(bucket_name, is_versioned):
