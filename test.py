@@ -1,7 +1,12 @@
+import io
+import json
+
 import boto3
 import os
 import pytest
 import time
+
+from boto3.s3.inject import bucket_upload_file
 
 # When running 'make test', these env vars are set by Docker in the docker-compose file.
 # This block is here for the case where a dev would like to run the tests directly instead
@@ -16,7 +21,9 @@ if 'ENVIRONMENT' not in os.environ:
     os.environ['TIER'] = 's3clean'
 
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
-    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, S3ClientPaginator
+    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, S3ClientPaginator, \
+    CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
+    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -311,6 +318,41 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(asset_bucket) == set(assets_to_keep)
 
 
+def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
+    dataset_version = 1
+
+    publish_keys, asset_keys = create_publish_files(publish_bucket,
+                                                    embargo_bucket,
+                                                    asset_bucket,
+                                                    S3_PREFIX_TO_DELETE,
+                                                    dataset_version)
+
+    publish_keys_to_keep, asset_keys_to_keep = create_publish_files(publish_bucket,
+                                                                    embargo_bucket,
+                                                                    asset_bucket,
+                                                                    S3_PREFIX_TO_KEEP,
+                                                                    dataset_version)
+
+    pre_clean_publish_keys = publish_keys.union(publish_keys_to_keep)
+    assert s3_keys(publish_bucket) == pre_clean_publish_keys
+    assert s3_keys(embargo_bucket) == pre_clean_publish_keys
+    assert s3_keys(asset_bucket) == asset_keys.union(asset_keys_to_keep)
+
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_version': dataset_version,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageFailure
+    }, {})
+
+    assert s3_keys(publish_bucket) == publish_keys_to_keep
+    assert s3_keys(embargo_bucket) == publish_keys_to_keep
+    assert s3_keys(asset_bucket) == asset_keys_to_keep
+
+
 def setup_bucket(bucket_name, is_versioned):
     s3_resource.create_bucket(Bucket=bucket_name)
     bucket = s3_resource.Bucket(bucket_name)
@@ -324,6 +366,12 @@ def s3_keys(bucket):
     return {obj.key for obj in bucket.objects.all()}
 
 
+def upload_content(bucket, content: str, key: str):
+    file_like = io.BytesIO(content.encode('utf-8'))
+    file_like.seek(0)
+    bucket.upload_fileobj(Fileobj=file_like, Key=key)
+
+
 def create_keys(prefix, filename, count=None):
     range_max = 1201 if count is None else count
     i = range(1, range_max)
@@ -335,6 +383,202 @@ def assert_custom_bucket_request_contains_requester_pays(**kwargs):
         assert kwargs.get('RequestPayer') == 'requester'
     else:
         assert kwargs.get('RequestPayer') is None
+
+
+def create_publish_files(publish_bucket, embargo_bucket, asset_bucket, dataset_id, dataset_version,
+                         include_intermediate_files=True) -> tuple[set[str], set[str]]:
+    publish_keys, asset_keys = create_dataset_assets(publish_bucket,
+                                                     embargo_bucket,
+                                                     asset_bucket,
+                                                     dataset_id,
+                                                     dataset_version,
+                                                     include_intermediate_files)
+
+    graph_keys = create_graph_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files)
+
+    keys = publish_keys.union(graph_keys)
+
+    if include_intermediate_files:
+        for name in PublishingIntermediateFiles:
+            # these were already created by the functions above if include_intermediate_files == True
+            if name != DatasetAssetsKey and name != GraphAssetsKey:
+                key = '{}/{}'.format(dataset_id, name)
+                keys.add(key)
+                if name == FileActionKey or name == MetadataCleanupKey or name == RevisionsCleanupKey:
+                    # these files are read in the failure stage so we send empty JSON to avoid an error
+                    upload_content(publish_bucket, '{}', key)
+                    upload_content(embargo_bucket, '{}', key)
+                else:
+                    publish_bucket.upload_file(FILENAME, key)
+                    embargo_bucket.upload_file(FILENAME, key)
+
+    return keys, asset_keys
+
+
+def create_dataset_assets(publish_bucket, embargo_bucket, asset_bucket, dataset_id, dataset_version,
+                          include_intermediate_files=True) -> tuple[set[str], set[str]]:
+    bucket_keys = set()
+    asset_bucket_keys = set()
+
+    asset_names = ['banner.jpg', 'readme.md', 'changelog.md']
+    asset_publish_keys = []
+
+    for name in asset_names:
+        key, dataset_asset_key = create_dataset_asset(publish_bucket, embargo_bucket, asset_bucket, dataset_id,
+                                                      dataset_version, name)
+        bucket_keys.add(key)
+        asset_bucket_keys.add(dataset_asset_key)
+        asset_publish_keys.append(key)
+
+    if include_intermediate_files:
+        # Populate buckets with a publish.json file that contains info on dataset assets
+        dataset_assets_file_key = '{}/{}'.format(dataset_id, DatasetAssetsKey)
+        bucket_keys.add(dataset_assets_file_key)
+
+        banner_manifest = {'path': asset_names[0]}
+        readme_manifest = {'path': asset_names[1]}
+        changelog_manifest = {'path': asset_names[2]}
+
+        # embargo version has no S3 version ids
+        embargo_dataset_assets = json.dumps({
+            'bannerManifest': banner_manifest,
+            'readmeManifest': readme_manifest,
+            'changelogManifest': changelog_manifest
+        })
+        upload_content(embargo_bucket, embargo_dataset_assets, dataset_assets_file_key)
+
+        # now add version ids for publish bucket
+        banner_obj = publish_bucket.Object(asset_publish_keys[0])
+        banner_manifest['s3VersionId'] = banner_obj.version_id
+        readme_obj = publish_bucket.Object(asset_publish_keys[1])
+        readme_manifest['s3VersionId'] = readme_obj.version_id
+        changelog_obj = publish_bucket.Object(asset_publish_keys[2])
+        changelog_manifest['s3VersionId'] = changelog_obj.version_id
+
+        dataset_assets = json.dumps({
+            'bannerManifest': banner_manifest,
+            'readmeManifest': readme_manifest,
+            'changelogManifest': changelog_manifest
+        })
+
+        upload_content(publish_bucket, dataset_assets, dataset_assets_file_key)
+
+    return bucket_keys, asset_bucket_keys
+
+
+def create_graph_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files=True) -> set[str]:
+    publish_keys = set()
+
+    asset_names = ['schema.csv', 'models.csv', 'records.csv', 'relationships.csv']
+    asset_publish_keys = []
+
+    for name in asset_names:
+        key = '{}/{}/{}'.format(dataset_id, MetadataPrefix, name)
+
+        publish_bucket.upload_file(FILENAME, key)
+        embargo_bucket.upload_file(FILENAME, key)
+
+        publish_keys.add(key)
+        asset_publish_keys.append(key)
+
+    if include_intermediate_files:
+        # Populate buckets with a graph.json file that contains info on graph assets
+        graph_assets_file_key = '{}/{}'.format(dataset_id, GraphAssetsKey)
+
+        manifests = []
+
+        # embargo version wouldn't have S3 version ids
+        for (name, key) in zip(asset_names, asset_publish_keys):
+            manifests.append({
+                'path': '{}/{}'.format(MetadataPrefix, name),
+            })
+
+        embargo_graph_assets = json.dumps({
+            'manifests': manifests
+        })
+
+        upload_content(embargo_bucket, embargo_graph_assets, graph_assets_file_key)
+
+        # now add the version ids for the publish bucket version
+        for (key, manifest) in zip(asset_publish_keys, manifests):
+            obj = publish_bucket.Object(key)
+            manifest['s3VersionId'] = obj.version_id
+
+        graph_assets = json.dumps({
+            'manifests': manifests
+        })
+
+        upload_content(publish_bucket, graph_assets, graph_assets_file_key)
+        publish_keys.add(graph_assets_file_key)
+
+    return publish_keys
+
+
+def create_dataset_asset(publish_bucket, embargo_bucket, asset_bucket, dataset_id, dataset_version, asset_name) -> \
+        tuple[str, str]:
+    # the key in the publish and embargo buckets
+    asset_key = '{}/{}'.format(dataset_id, asset_name)
+    # the key in the dataset asset bucket includes the version since this bucket is not versioned.
+    asset_bucket_key = '{}/{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, dataset_id, dataset_version, asset_name)
+
+    publish_bucket.upload_file(FILENAME, asset_key)
+    embargo_bucket.upload_file(FILENAME, asset_key)
+    asset_bucket.upload_file(FILENAME, asset_bucket_key)
+
+    return asset_key, asset_bucket_key
+
+
+def create_file_actions(publish_bucket, embargo_bucket, dataset_id) -> set[str]:
+    keys = set()
+    file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
+    keys.add(file_action_key)
+
+    # a copied file with no version in the file action for publish bucket
+    no_version_copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'no-version-copied.txt')
+    keys.add(no_version_copied_key)
+    publish_bucket.upload_file(FILENAME, no_version_copied_key)
+    embargo_bucket.upload_file(FILENAME, no_version_copied_key)
+
+    # a copied file with a version in the file action for publish bucket
+    copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'copied.txt')
+    keys.add(copied_key)
+    publish_bucket.upload_file(FILENAME, copied_key)
+    embargo_bucket.upload_file(FILENAME, copied_key)
+
+    embargo_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: embargo_bucket.name,
+                FileActionPathTag: no_version_copied_key,
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: embargo_bucket.name,
+                FileActionPathTag: copied_key,
+            },
+        ]
+    })
+    upload_content(embargo_bucket, embargo_bucket_file_actions, file_action_key)
+
+    copied_obj = publish_bucket.Object(copied_key)
+    publish_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: no_version_copied_key,
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: copied_key,
+                FileActionVersionTag: copied_obj.version_id
+            },
+        ]
+    })
+    upload_content(publish_bucket, publish_bucket_file_actions, file_action_key)
+    return keys
 
 
 class MockClient:
