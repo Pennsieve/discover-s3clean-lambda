@@ -1,12 +1,13 @@
 import io
 import json
+from ssl import create_default_context
 
 import boto3
 import os
 import pytest
 import time
 
-from boto3.s3.inject import bucket_upload_file
+from botocore.retryhandler import create_exponential_delay_function
 
 # When running 'make test', these env vars are set by Docker in the docker-compose file.
 # This block is here for the case where a dev would like to run the tests directly instead
@@ -21,7 +22,7 @@ if 'ENVIRONMENT' not in os.environ:
     os.environ['TIER'] = 's3clean'
 
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
-    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, S3ClientPaginator, \
+    MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
     CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
     FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy
 
@@ -318,6 +319,7 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(asset_bucket) == set(assets_to_keep)
 
 
+# this does not test the handling of file actions
 def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
     dataset_version = 1
 
@@ -351,6 +353,90 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == publish_keys_to_keep
     assert s3_keys(embargo_bucket) == publish_keys_to_keep
     assert s3_keys(asset_bucket) == asset_keys_to_keep
+
+
+def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
+    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_version = 2
+
+    created_keys = set()
+    file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
+    created_keys.add(file_action_key)
+
+    # a copied file with no version in the file action for publish bucket
+    no_version_copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'no-version-copied.txt')
+    created_keys.add(no_version_copied_key)
+    publish_bucket.upload_file(FILENAME, no_version_copied_key)
+    embargo_bucket.upload_file(FILENAME, no_version_copied_key)
+
+    # a copied file with a version in the file action for publish bucket
+    copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'copied.txt')
+    created_keys.add(copied_key)
+
+    # version 1 in the publish bucket
+    publish_bucket.upload_file(FILENAME, copied_key)
+    copied_v1 = publish_bucket.Object(copied_key).version_id
+
+    # version 2 in the publish bucket
+    publish_bucket.upload_file(FILENAME, copied_key)
+    copied_v2 = publish_bucket.Object(copied_key).version_id
+
+    assert copied_v1 != copied_v2
+
+    embargo_bucket.upload_file(FILENAME, copied_key)
+
+    embargo_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: embargo_bucket.name,
+                FileActionPathTag: no_version_copied_key,
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: embargo_bucket.name,
+                FileActionPathTag: copied_key,
+            },
+        ]
+    })
+    upload_content(embargo_bucket, embargo_bucket_file_actions, file_action_key)
+
+    publish_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: no_version_copied_key,
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: copied_key,
+                FileActionVersionTag: copied_v1
+            },
+        ]
+    })
+    upload_content(publish_bucket, publish_bucket_file_actions, file_action_key)
+
+    assert s3_keys(publish_bucket) == created_keys
+    assert s3_keys(embargo_bucket) == created_keys
+
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_version': dataset_version,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageFailure
+    }, {})
+
+    assert s3_keys(embargo_bucket) == set()
+    assert s3_keys(publish_bucket) == {copied_key}
+
+    actual_versions = list(publish_bucket.object_versions.filter(Prefix=copied_key))
+    assert len(actual_versions) == 1
+    assert actual_versions[0].id == copied_v1
 
 
 def setup_bucket(bucket_name, is_versioned):
@@ -526,59 +612,6 @@ def create_dataset_asset(publish_bucket, embargo_bucket, asset_bucket, dataset_i
     asset_bucket.upload_file(FILENAME, asset_bucket_key)
 
     return asset_key, asset_bucket_key
-
-
-def create_file_actions(publish_bucket, embargo_bucket, dataset_id) -> set[str]:
-    keys = set()
-    file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
-    keys.add(file_action_key)
-
-    # a copied file with no version in the file action for publish bucket
-    no_version_copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'no-version-copied.txt')
-    keys.add(no_version_copied_key)
-    publish_bucket.upload_file(FILENAME, no_version_copied_key)
-    embargo_bucket.upload_file(FILENAME, no_version_copied_key)
-
-    # a copied file with a version in the file action for publish bucket
-    copied_key = '{}/{}/{}'.format(dataset_id, 'files', 'copied.txt')
-    keys.add(copied_key)
-    publish_bucket.upload_file(FILENAME, copied_key)
-    embargo_bucket.upload_file(FILENAME, copied_key)
-
-    embargo_bucket_file_actions = json.dumps({
-        FileActionListTag: [
-            {
-                FileActionTag: FileActionCopy,
-                FileActionBucketTag: embargo_bucket.name,
-                FileActionPathTag: no_version_copied_key,
-            },
-            {
-                FileActionTag: FileActionCopy,
-                FileActionBucketTag: embargo_bucket.name,
-                FileActionPathTag: copied_key,
-            },
-        ]
-    })
-    upload_content(embargo_bucket, embargo_bucket_file_actions, file_action_key)
-
-    copied_obj = publish_bucket.Object(copied_key)
-    publish_bucket_file_actions = json.dumps({
-        FileActionListTag: [
-            {
-                FileActionTag: FileActionCopy,
-                FileActionBucketTag: publish_bucket.name,
-                FileActionPathTag: no_version_copied_key,
-            },
-            {
-                FileActionTag: FileActionCopy,
-                FileActionBucketTag: publish_bucket.name,
-                FileActionPathTag: copied_key,
-                FileActionVersionTag: copied_obj.version_id
-            },
-        ]
-    })
-    upload_content(publish_bucket, publish_bucket_file_actions, file_action_key)
-    return keys
 
 
 class MockClient:
