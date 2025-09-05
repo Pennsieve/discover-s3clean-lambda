@@ -4,6 +4,8 @@ from ssl import create_default_context
 
 import boto3
 import os
+
+import botocore.exceptions
 import pytest
 import time
 
@@ -24,7 +26,7 @@ if 'ENVIRONMENT' not in os.environ:
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
     MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
     CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
-    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy
+    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep, delete_dataset_assets
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -437,6 +439,141 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     actual_versions = list(publish_bucket.object_versions.filter(Prefix=copied_key))
     assert len(actual_versions) == 1
     assert actual_versions[0].id == copied_v1
+
+
+# Only tests publish bucket and not embargo. Assuming we'd never see
+# a keep file action in an embargoed publish.
+def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
+    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_version = 2
+
+    created_keys = set()
+    file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
+    created_keys.add(file_action_key)
+
+    # a kept file
+    kept_key = '{}/{}/{}'.format(dataset_id, 'files', 'kept.txt')
+    created_keys.add(kept_key)
+
+    # version 1 in the publish bucket
+    publish_bucket.upload_file(FILENAME, kept_key)
+    kept_v1 = publish_bucket.Object(kept_key).version_id
+
+    # version 2 in the publish bucket
+    publish_bucket.upload_file(FILENAME, kept_key)
+    kept_v2 = publish_bucket.Object(kept_key).version_id
+
+    assert kept_v1 != kept_v2
+
+    publish_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionKeep,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: kept_key,
+                FileActionVersionTag: kept_v2
+            },
+        ]
+    })
+    upload_content(publish_bucket, publish_bucket_file_actions, file_action_key)
+
+    assert s3_keys(publish_bucket) == created_keys
+
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_version': dataset_version,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageFailure
+    }, {})
+
+    assert s3_keys(publish_bucket) == {kept_key}
+
+    version_id_to_is_latest = {}
+    for version in publish_bucket.object_versions.filter(Prefix=kept_key):
+        version_id_to_is_latest[version.id] = version.is_latest
+
+    assert len(version_id_to_is_latest) == 2
+    assert not version_id_to_is_latest[kept_v1]
+    assert version_id_to_is_latest[kept_v2]
+
+
+# Only tests publish bucket and not embargo. Assuming we'd never see
+# a delete file action in an embargoed publish.
+def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
+    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_version = 3
+
+    expected_pre_clean_keys = set()
+    file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
+    expected_pre_clean_keys.add(file_action_key)
+
+    # a deleted file. Not added to expected_pre_clean_keys because we will put a
+    # delete marker on top
+    deleted_key = '{}/{}/{}'.format(dataset_id, 'files', 'deleted.txt')
+
+    # version 1 in the publish bucket
+    publish_bucket.upload_file(FILENAME, deleted_key)
+    deleted_v1 = publish_bucket.Object(deleted_key).version_id
+
+    # version 2 in the publish bucket
+    publish_bucket.upload_file(FILENAME, deleted_key)
+    deleted_obj = publish_bucket.Object(deleted_key)
+    deleted_v2 = deleted_obj.version_id
+
+    assert deleted_v1 != deleted_v2
+
+    # add the delete marker on top
+    delete_resp = deleted_obj.delete()
+    deleted_vdelete_marker = delete_resp['VersionId']
+
+    assert deleted_vdelete_marker != deleted_v1
+    assert deleted_vdelete_marker != deleted_v2
+
+    delete_marker_obj = publish_bucket.Object(deleted_key)
+    try:
+        delete_marker_obj.load()
+    except botocore.exceptions.ClientError as e:
+        response_metadata = e.response['ResponseMetadata']
+        print(response_metadata['HTTPStatusCode'])
+        print(response_metadata['HTTPHeaders'])
+
+    publish_bucket_file_actions = json.dumps({
+        FileActionListTag: [
+            {
+                FileActionTag: FileActionKeep,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: deleted_key,
+                FileActionVersionTag: deleted_v2
+            },
+        ]
+    })
+    upload_content(publish_bucket, publish_bucket_file_actions, file_action_key)
+
+    assert s3_keys(publish_bucket) == expected_pre_clean_keys
+
+    lambda_handler({
+        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_version': dataset_version,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageFailure
+    }, {})
+
+    assert s3_keys(publish_bucket) == {deleted_key}
+
+    version_id_to_is_latest = {}
+    for version in publish_bucket.object_versions.filter(Prefix=deleted_key):
+        version_id_to_is_latest[version.id] = version.is_latest
+
+    assert len(version_id_to_is_latest) == 2
+    assert deleted_vdelete_marker not in version_id_to_is_latest
+    assert not version_id_to_is_latest[deleted_v1]
+    assert version_id_to_is_latest[deleted_v2]
 
 
 def setup_bucket(bucket_name, is_versioned):
