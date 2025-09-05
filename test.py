@@ -387,6 +387,8 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 
     embargo_bucket.upload_file(FILENAME, copied_key)
 
+    # TODO add another file to test the case where the copy did not yet happen before the failure
+
     embargo_bucket_file_actions = json.dumps({
         FileActionListTag: [
             {
@@ -532,6 +534,7 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert deleted_vdelete_marker != deleted_v1
     assert deleted_vdelete_marker != deleted_v2
 
+    # TODO turn this into a delete-marker test
     delete_marker_obj = publish_bucket.Object(deleted_key)
     try:
         delete_marker_obj.load()
@@ -540,6 +543,7 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
         print(response_metadata['HTTPStatusCode'])
         print(response_metadata['HTTPHeaders'])
 
+    # TODO add another test file for case where the delete did not yet happen.
     publish_bucket_file_actions = json.dumps({
         FileActionListTag: [
             {
