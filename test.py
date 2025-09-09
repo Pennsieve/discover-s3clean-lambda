@@ -1,6 +1,5 @@
 import io
 import json
-from ssl import create_default_context
 
 import boto3
 import os
@@ -8,8 +7,6 @@ import os
 import botocore.exceptions
 import pytest
 import time
-
-from botocore.retryhandler import create_exponential_delay_function
 
 # When running 'make test', these env vars are set by Docker in the docker-compose file.
 # This block is here for the case where a dev would like to run the tests directly instead
@@ -26,7 +23,7 @@ if 'ENVIRONMENT' not in os.environ:
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
     MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
     CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
-    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep, delete_dataset_assets
+    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -387,7 +384,15 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 
     embargo_bucket.upload_file(FILENAME, copied_key)
 
-    # TODO add another file to test the case where the copy did not yet happen before the failure
+    # A file that did not get copied before the publish failed. So there is no
+    # v2.
+    uncopied_key = '{}/{}/{}'.format(dataset_id, 'files', 'uncopied.txt')
+    created_keys.add(uncopied_key)
+
+    publish_bucket.upload_file(FILENAME, uncopied_key)
+    uncopied_v1 = publish_bucket.Object(uncopied_key).version_id
+
+    embargo_bucket.upload_file(FILENAME, uncopied_key)
 
     embargo_bucket_file_actions = json.dumps({
         FileActionListTag: [
@@ -400,6 +405,11 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
                 FileActionTag: FileActionCopy,
                 FileActionBucketTag: embargo_bucket.name,
                 FileActionPathTag: copied_key,
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: embargo_bucket.name,
+                FileActionPathTag: uncopied_key,
             },
         ]
     })
@@ -417,6 +427,12 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
                 FileActionBucketTag: publish_bucket.name,
                 FileActionPathTag: copied_key,
                 FileActionVersionTag: copied_v1
+            },
+            {
+                FileActionTag: FileActionCopy,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: uncopied_key,
+                FileActionVersionTag: uncopied_v1
             },
         ]
     })
@@ -436,11 +452,15 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     }, {})
 
     assert s3_keys(embargo_bucket) == set()
-    assert s3_keys(publish_bucket) == {copied_key}
+    assert s3_keys(publish_bucket) == {copied_key, uncopied_key}
 
-    actual_versions = list(publish_bucket.object_versions.filter(Prefix=copied_key))
-    assert len(actual_versions) == 1
-    assert actual_versions[0].id == copied_v1
+    actual_copied_versions = list(publish_bucket.object_versions.filter(Prefix=copied_key))
+    assert len(actual_copied_versions) == 1
+    assert actual_copied_versions[0].id == copied_v1
+
+    actual_uncopied_versions = list(publish_bucket.object_versions.filter(Prefix=uncopied_key))
+    assert len(actual_uncopied_versions) == 1
+    assert actual_uncopied_versions[0].id == uncopied_v1
 
 
 # Only tests publish bucket and not embargo. Assuming we'd never see
