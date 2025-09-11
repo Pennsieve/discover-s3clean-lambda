@@ -15,7 +15,6 @@ class S3CleanConfig:
     assets_prefix: str
     publish_bucket_id: str
     embargo_bucket_id: str
-    s3_key_prefix: str
     cleanup_stage: str
     workflow_id: int
     dataset_id: str
@@ -190,6 +189,9 @@ Default_TidyEnabled = True
 
 NoValue = "(none)"
 
+PublishedDatasetVersionKey = "published_dataset_version"
+NoPublishedDatasetVersion = "-1"
+
 PublishingIntermediateFiles = [FileActionKey,
                                GraphAssetsKey,
                                OutputAssetsKey,
@@ -232,22 +234,23 @@ def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPagi
 
         publish_bucket_id = event['publish_bucket']
         embargo_bucket_id = event['embargo_bucket']
-        s3_key_prefix = event.get('s3_key_prefix', "-1")
+
         cleanup_stage = event.get("cleanup_stage", CleanupStageInitial)
         workflow_id = int(event.get("workflow_id", "4"))
-        dataset_id = event.get("published_dataset_id", "-1")
-        dataset_version = event.get("published_dataset_version", "-1")
+
         tidy_enabled_evt = event.get("tidy_enabled")
 
         tidy_enabled = is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env)
 
-        s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id,
-                                        s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version,
-                                        tidy_enabled)
-
         if workflow_id == 5:
+            dataset_id = event["published_dataset_id"]
+            dataset_version = event.get(PublishedDatasetVersionKey, NoPublishedDatasetVersion)
+            s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id,
+                                            cleanup_stage, workflow_id, dataset_id, dataset_version,
+                                            tidy_enabled)
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
+            s3_key_prefix = event['s3_key_prefix']
             if cleanup_stage == CleanupStageTidy:
                 tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
             else:
@@ -337,6 +340,8 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
         purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageFailure:
+        if s3_clean_config.dataset_version == NoPublishedDatasetVersion:
+            raise Exception(f"missing required event parameter '{PublishedDatasetVersionKey}'")
         purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config)
 
 
@@ -350,7 +355,7 @@ def purge_v5_tidy(log, s3_client, s3_clean_config):
     if s3_clean_config.tidy_enabled:
         log.info(f"purge_v5_tidy() removing intermediate publishing files")
         for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.dataset_id)
     else:
         log.info(f"purge_v5_tidy() requested but disabled")
 
@@ -380,7 +385,7 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
         delete_graph_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         if s3_clean_config.tidy_enabled:
-            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.dataset_id)
 
     # Clean up the Public Assets Bucket
     cleanup_public_assets_bucket(log,

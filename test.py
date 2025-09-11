@@ -245,7 +245,7 @@ def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': S3_PREFIX_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
         'workflow_id': '5',
@@ -299,7 +299,6 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
@@ -340,7 +339,6 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(asset_bucket) == asset_keys.union(asset_keys_to_keep)
 
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
@@ -442,7 +440,6 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(embargo_bucket) == created_keys
 
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
@@ -502,7 +499,6 @@ def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == created_keys
 
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
@@ -592,7 +588,6 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == expected_pre_clean_keys
 
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
         'published_dataset_id': S3_PREFIX_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
