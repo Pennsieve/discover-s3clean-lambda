@@ -516,6 +516,7 @@ def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     version_id_to_is_latest = {}
     for version in publish_bucket.object_versions.filter(Prefix=kept_key):
         version_id_to_is_latest[version.id] = version.is_latest
+        assert not is_delete_marker(publish_bucket, kept_key, version.id)
 
     assert len(version_id_to_is_latest) == 2
     assert not version_id_to_is_latest[kept_v1]
@@ -605,6 +606,7 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     version_id_to_is_latest = {}
     for version in publish_bucket.object_versions.filter(Prefix=deleted_key):
         version_id_to_is_latest[version.id] = version.is_latest
+        assert not is_delete_marker(publish_bucket, deleted_key, version.id)
 
     assert len(version_id_to_is_latest) == 2
     assert deleted_vdelete_marker not in version_id_to_is_latest
@@ -614,10 +616,52 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     version_id_to_is_latest = {}
     for version in publish_bucket.object_versions.filter(Prefix=undeleted_key):
         version_id_to_is_latest[version.id] = version.is_latest
+        assert not is_delete_marker(publish_bucket, undeleted_key, version.id)
 
     assert len(version_id_to_is_latest) == 2
     assert not version_id_to_is_latest[undeleted_v1]
     assert version_id_to_is_latest[undeleted_v2]
+
+
+# Testing a test helper, because the logic was more complicated than expected.
+def test_is_delete_marker(publish_bucket):
+    simple_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, "simple.txt")
+    publish_bucket.upload_file(FILENAME, simple_key)
+
+    assert not is_delete_marker(publish_bucket, simple_key)
+    assert not is_delete_marker(publish_bucket, simple_key, publish_bucket.Object(simple_key).version_id)
+
+    versions_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, "versions.txt")
+
+    # V1
+    publish_bucket.upload_file(FILENAME, versions_key)
+    v1_id = publish_bucket.Object(versions_key).version_id
+
+    # V2
+    publish_bucket.upload_file(FILENAME, versions_key)
+    versions_obj = publish_bucket.Object(versions_key)
+    v2_id = versions_obj.version_id
+
+    assert v1_id != v2_id
+
+    # add the delete marker on top
+    delete_resp = versions_obj.delete()
+    delete_marker_id = delete_resp['VersionId']
+
+    assert is_delete_marker(publish_bucket, versions_key)
+
+    assert not is_delete_marker(publish_bucket, versions_key, v1_id)
+    assert not is_delete_marker(publish_bucket, versions_key, v2_id)
+    assert is_delete_marker(publish_bucket, versions_key, delete_marker_id)
+    with pytest.raises(botocore.exceptions.ClientError):
+        is_delete_marker(publish_bucket, versions_key, 'fake-version-id')
+
+    # tests with a key that does not exist in bucket at all
+    no_obj_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, 'notuploaded.txt')
+    with pytest.raises(botocore.exceptions.ClientError):
+        is_delete_marker(publish_bucket, no_obj_key)
+    with pytest.raises(botocore.exceptions.ClientError):
+        is_delete_marker(publish_bucket, no_obj_key, 'fake-version-id')
 
 
 def setup_bucket(bucket_name, is_versioned):
@@ -643,6 +687,41 @@ def create_keys(prefix, filename, count=None):
     range_max = 1201 if count is None else count
     i = range(1, range_max)
     return list(map(lambda x: '{}/{}{}'.format(prefix, x, filename), i))
+
+
+# Returns True if bucket.Object(key).load() returns 404 with a delete marker header or if
+# if s3_resource.ObjectVersion(bucket.name, key, version_id).head() returns 405 with a delete marker header and False
+# it completes successfully. If any other exception is raised it is re-raised.
+def is_delete_marker(bucket, key, version_id=None):
+    if version_id is None:
+        loader = bucket.Object(key).load
+        # AWS and localstack will respond 404 to an Object.load() on a delete marker
+        delete_marker_status_code = 404
+        # AWS and localstack will send x-amz-delete-marker: true in the headers on a delete marker
+        expect_delete_marker_header = True
+    else:
+        loader = s3_resource.ObjectVersion(bucket.name, key, version_id).head
+        # AWS and localstack will respond 405 to an ObjectVersion.head() on a delete marker
+        delete_marker_status_code = 405
+        # Neither AWS nor localstack sends the delete marker header for ObjectVersion.head()
+        # AWS sets the Last-Modified header, but unfortunately, localstack does not
+        expect_delete_marker_header = False
+    try:
+        loader()
+    except botocore.exceptions.ClientError as e:
+        response_metadata = e.response.get('ResponseMetadata', {})
+        status_code = response_metadata.get('HTTPStatusCode')
+        if status_code != delete_marker_status_code:
+            print('unexpected satus code', status_code)
+            raise e
+        if not expect_delete_marker_header or response_metadata.get('HTTPHeaders', {}).get('x-amz-delete-marker'):
+            return True
+        else:
+            print('unexpected headers', response_metadata.get('HTTPHeaders', {}))
+            raise e
+
+    # If no exception, then definitely not a delete marker
+    return False
 
 
 def assert_custom_bucket_request_contains_requester_pays(**kwargs):
