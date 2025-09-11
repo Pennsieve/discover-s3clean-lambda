@@ -554,16 +554,22 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert deleted_vdelete_marker != deleted_v1
     assert deleted_vdelete_marker != deleted_v2
 
-    # TODO turn this into a delete-marker test
-    delete_marker_obj = publish_bucket.Object(deleted_key)
-    try:
-        delete_marker_obj.load()
-    except botocore.exceptions.ClientError as e:
-        response_metadata = e.response['ResponseMetadata']
-        print(response_metadata['HTTPStatusCode'])
-        print(response_metadata['HTTPHeaders'])
+    # A file that is marked for deletion, but was not deleted before the publish failed.
+    # So no delete marker on top
+    undeleted_key = '{}/{}/{}'.format(dataset_id, 'files', 'undeleted.txt')
+    expected_pre_clean_keys.add(undeleted_key)
 
-    # TODO add another test file for case where the delete did not yet happen.
+    # version 1 in the publish bucket
+    publish_bucket.upload_file(FILENAME, undeleted_key)
+    undeleted_v1 = publish_bucket.Object(undeleted_key).version_id
+
+    # version 2 in the publish bucket
+    publish_bucket.upload_file(FILENAME, undeleted_key)
+    undeleted_obj = publish_bucket.Object(undeleted_key)
+    undeleted_v2 = undeleted_obj.version_id
+
+    assert undeleted_v1 != undeleted_v2
+
     publish_bucket_file_actions = json.dumps({
         FileActionListTag: [
             {
@@ -571,6 +577,12 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
                 FileActionBucketTag: publish_bucket.name,
                 FileActionPathTag: deleted_key,
                 FileActionVersionTag: deleted_v2
+            },
+            {
+                FileActionTag: FileActionKeep,
+                FileActionBucketTag: publish_bucket.name,
+                FileActionPathTag: undeleted_key,
+                FileActionVersionTag: undeleted_v2
             },
         ]
     })
@@ -588,7 +600,7 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
         'cleanup_stage': CleanupStageFailure
     }, {})
 
-    assert s3_keys(publish_bucket) == {deleted_key}
+    assert s3_keys(publish_bucket) == {deleted_key, undeleted_key}
 
     version_id_to_is_latest = {}
     for version in publish_bucket.object_versions.filter(Prefix=deleted_key):
@@ -598,6 +610,14 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert deleted_vdelete_marker not in version_id_to_is_latest
     assert not version_id_to_is_latest[deleted_v1]
     assert version_id_to_is_latest[deleted_v2]
+
+    version_id_to_is_latest = {}
+    for version in publish_bucket.object_versions.filter(Prefix=undeleted_key):
+        version_id_to_is_latest[version.id] = version.is_latest
+
+    assert len(version_id_to_is_latest) == 2
+    assert not version_id_to_is_latest[undeleted_v1]
+    assert version_id_to_is_latest[undeleted_v2]
 
 
 def setup_bucket(bucket_name, is_versioned):
