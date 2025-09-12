@@ -33,11 +33,11 @@ DATASET_ASSETS_KEY_PREFIX = 'dataset-assets'
 
 # This key corresponds to assets belonging to a dataset
 # that is either being unpublished or was not published successfully
-S3_PREFIX_TO_DELETE = '11'
+DATASET_TO_DELETE = '11'
 
 # This key corresponds to assets belonging to a dataset version
 # that should remain untouched by this lambda function
-S3_PREFIX_TO_KEEP = '111'
+DATASET_TO_KEEP = '111'
 
 # This is a dummy file
 FILENAME = 'test.txt'
@@ -71,7 +71,9 @@ def asset_bucket(setup):
 
 
 def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
-    s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
+    s3_prefix_to_delete = '{}/{}'.format(DATASET_TO_DELETE, 11)
+    s3_prefix_to_keep = '{}/{}'.format(DATASET_TO_KEEP, 1)
+    s3_key_to_keep = '{}/{}'.format(s3_prefix_to_keep, FILENAME)
     asset_key_to_keep = '{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_key_to_keep)
 
     publish_bucket.upload_file(Filename=FILENAME, Key=s3_key_to_keep)
@@ -84,7 +86,7 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_key_prefix': s3_prefix_to_delete,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET
     }, {})
@@ -96,10 +98,13 @@ def test_empty_dataset(publish_bucket, embargo_bucket, asset_bucket):
 
 
 def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_bucket):
-    s3_keys_to_delete = create_keys(S3_PREFIX_TO_DELETE, FILENAME)
-    s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
-    asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, FILENAME)
-    asset_key_to_keep = '{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_key_to_keep)
+    s3_prefix_to_delete = '{}/{}'.format(DATASET_TO_DELETE, 11)
+    s3_prefix_to_keep = '{}/{}'.format(DATASET_TO_KEEP, 1)
+
+    s3_keys_to_delete = create_keys(s3_prefix_to_delete, FILENAME)
+    s3_key_to_keep = '{}/{}'.format(s3_prefix_to_keep, FILENAME)
+    asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_prefix_to_delete, FILENAME)
+    asset_key_to_keep = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_prefix_to_keep, FILENAME)
 
     for key in s3_keys_to_delete:
         publish_bucket.upload_file(Filename=FILENAME, Key=key)
@@ -118,7 +123,7 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_key_prefix': s3_prefix_to_delete,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET
     }, {})
@@ -130,10 +135,13 @@ def test_large_dataset_for_publish_bucket(publish_bucket, embargo_bucket, asset_
 
 
 def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_bucket):
-    s3_key_to_delete = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
-    s3_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_KEEP, FILENAME)
-    asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, FILENAME)
-    asset_key_to_keep = '{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_key_to_keep)
+    s3_prefix_to_delete = '{}/{}'.format(DATASET_TO_DELETE, 11)
+    s3_prefix_to_keep = '{}/{}'.format(DATASET_TO_KEEP, 1)
+
+    s3_key_to_delete = '{}/{}'.format(s3_prefix_to_delete, FILENAME)
+    s3_key_to_keep = '{}/{}'.format(s3_prefix_to_keep, FILENAME)
+    asset_key_to_delete = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_prefix_to_delete, FILENAME)
+    asset_key_to_keep = '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, s3_prefix_to_keep, FILENAME)
 
     publish_bucket.upload_file(Filename=FILENAME, Key=s3_key_to_delete)
     embargo_bucket.upload_file(Filename=FILENAME, Key=s3_key_to_delete)
@@ -150,7 +158,7 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
 
     # RUN LAMBDA
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE + "/",
+        's3_key_prefix': s3_prefix_to_delete + "/",
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
     }, {})
@@ -161,23 +169,23 @@ def test_handle_input_with_trailing_slash(publish_bucket, embargo_bucket, asset_
     assert s3_keys(asset_bucket) == {asset_key_to_keep}
 
 
-def test_include_requestor_pays():
+def test_include_requestor_pays(setup):
     lambda_handler({
-        's3_key_prefix': S3_PREFIX_TO_DELETE,
+        's3_key_prefix': DATASET_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
     }, {}, s3_client=MockClient(), s3_paginator=MockPaginator())
 
 
 def test_cleanup_state_initial(publish_bucket, embargo_bucket):
-    revision_key_to_delete = '{}/{}/{}'.format(S3_PREFIX_TO_DELETE, RevisionsPrefix, FILENAME)
-    other_dataset_revision_key_to_keep = '{}/{}/{}'.format(S3_PREFIX_TO_KEEP, RevisionsPrefix, FILENAME)
+    revision_key_to_delete = '{}/{}/{}'.format(DATASET_TO_DELETE, RevisionsPrefix, FILENAME)
+    other_dataset_revision_key_to_keep = '{}/{}/{}'.format(DATASET_TO_KEEP, RevisionsPrefix, FILENAME)
 
-    metadata_key_to_delete = '{}/{}/{}'.format(S3_PREFIX_TO_DELETE, MetadataPrefix, FILENAME)
-    other_dataset_metadata_key_to_keep = '{}/{}/{}'.format(S3_PREFIX_TO_KEEP, MetadataPrefix, FILENAME)
+    metadata_key_to_delete = '{}/{}/{}'.format(DATASET_TO_DELETE, MetadataPrefix, FILENAME)
+    other_dataset_metadata_key_to_keep = '{}/{}/{}'.format(DATASET_TO_KEEP, MetadataPrefix, FILENAME)
 
     # files outside of revisions and metadata should be untouched in the initial cleanup stage
-    file_key_to_keep = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
+    file_key_to_keep = '{}/{}'.format(DATASET_TO_DELETE, FILENAME)
 
     publish_bucket.upload_file(Filename=FILENAME, Key=file_key_to_keep)
     embargo_bucket.upload_file(Filename=FILENAME, Key=file_key_to_keep)
@@ -204,7 +212,7 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
         'workflow_id': '5',
@@ -215,8 +223,8 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket):
         other_dataset_revision_key_to_keep,
         other_dataset_metadata_key_to_keep,
         file_key_to_keep,
-        '{}/{}'.format(S3_PREFIX_TO_DELETE, RevisionsCleanupKey),
-        '{}/{}'.format(S3_PREFIX_TO_DELETE, MetadataCleanupKey),
+        '{}/{}'.format(DATASET_TO_DELETE, RevisionsCleanupKey),
+        '{}/{}'.format(DATASET_TO_DELETE, MetadataCleanupKey),
     }
 
     assert s3_keys(publish_bucket) == post_clean_expected_keys
@@ -224,11 +232,11 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket):
 
 
 def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
-    intermediate_keys_to_delete = ['{}/{}'.format(S3_PREFIX_TO_DELETE, x) for x in PublishingIntermediateFiles]
-    intermediate_keys_to_keep = ['{}/{}'.format(S3_PREFIX_TO_KEEP, x) for x in PublishingIntermediateFiles]
+    intermediate_keys_to_delete = ['{}/{}'.format(DATASET_TO_DELETE, x) for x in PublishingIntermediateFiles]
+    intermediate_keys_to_keep = ['{}/{}'.format(DATASET_TO_KEEP, x) for x in PublishingIntermediateFiles]
 
     # a key in the dataset being cleaned that tidy should ignore
-    untouched_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, FILENAME)
+    untouched_key = '{}/{}'.format(DATASET_TO_DELETE, FILENAME)
 
     for key in intermediate_keys_to_keep:
         publish_bucket.upload_file(Filename=FILENAME, Key=key)
@@ -246,7 +254,7 @@ def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
         'workflow_id': '5',
@@ -260,10 +268,10 @@ def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
 
 
 def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
-    keys_to_delete = create_keys(S3_PREFIX_TO_DELETE, FILENAME, count=5) + create_keys(
-        '{}/{}'.format(S3_PREFIX_TO_DELETE, 'files'), FILENAME, count=7)
-    keys_to_keep = create_keys(S3_PREFIX_TO_KEEP, FILENAME, count=3) + create_keys(
-        '{}/{}'.format(S3_PREFIX_TO_KEEP, 'files'), FILENAME, count=2)
+    keys_to_delete = create_keys(DATASET_TO_DELETE, FILENAME, count=5) + create_keys(
+        '{}/{}'.format(DATASET_TO_DELETE, 'files'), FILENAME, count=7)
+    keys_to_keep = create_keys(DATASET_TO_KEEP, FILENAME, count=3) + create_keys(
+        '{}/{}'.format(DATASET_TO_KEEP, 'files'), FILENAME, count=2)
 
     # Version 1
     for key in keys_to_keep:
@@ -284,14 +292,14 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(embargo_bucket) == pre_clean_expected_keys
 
     # Assets too
-    assets_to_delete = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, 1), FILENAME,
+    assets_to_delete = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, DATASET_TO_DELETE, 1), FILENAME,
                                    count=4) + create_keys(
-        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_DELETE, 2), FILENAME,
+        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, DATASET_TO_DELETE, 2), FILENAME,
         count=4)
 
-    assets_to_keep = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_KEEP, 1), FILENAME,
+    assets_to_keep = create_keys('{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, DATASET_TO_KEEP, 1), FILENAME,
                                  count=4) + create_keys(
-        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, S3_PREFIX_TO_KEEP, 2), FILENAME,
+        '{}/{}/{}'.format(DATASET_ASSETS_KEY_PREFIX, DATASET_TO_KEEP, 2), FILENAME,
         count=4)
     for key in assets_to_delete + assets_to_keep:
         asset_bucket.upload_file(Filename=FILENAME, Key=key)
@@ -300,7 +308,7 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
 
     # RUN LAMBDA
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
         'workflow_id': '5',
@@ -325,13 +333,13 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
     publish_keys, asset_keys = create_publish_files(publish_bucket,
                                                     embargo_bucket,
                                                     asset_bucket,
-                                                    S3_PREFIX_TO_DELETE,
+                                                    DATASET_TO_DELETE,
                                                     dataset_version)
 
     publish_keys_to_keep, asset_keys_to_keep = create_publish_files(publish_bucket,
                                                                     embargo_bucket,
                                                                     asset_bucket,
-                                                                    S3_PREFIX_TO_KEEP,
+                                                                    DATASET_TO_KEEP,
                                                                     dataset_version)
 
     pre_clean_publish_keys = publish_keys.union(publish_keys_to_keep)
@@ -340,7 +348,7 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(asset_bucket) == asset_keys.union(asset_keys_to_keep)
 
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
@@ -354,7 +362,7 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
 
 
 def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
-    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_id = DATASET_TO_DELETE
     dataset_version = 2
 
     created_keys = set()
@@ -441,7 +449,7 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(embargo_bucket) == created_keys
 
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
@@ -464,7 +472,7 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 # Only tests publish bucket and not embargo. Assuming we'd never see
 # a keep file action in an embargoed publish.
 def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
-    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_id = DATASET_TO_DELETE
     dataset_version = 2
 
     created_keys = set()
@@ -500,7 +508,7 @@ def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == created_keys
 
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
@@ -523,7 +531,7 @@ def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 # Only tests publish bucket and not embargo. Assuming we'd never see
 # a delete file action in an embargoed publish.
 def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
-    dataset_id = S3_PREFIX_TO_DELETE
+    dataset_id = DATASET_TO_DELETE
     dataset_version = 3
 
     expected_pre_clean_keys = set()
@@ -589,7 +597,7 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert s3_keys(publish_bucket) == expected_pre_clean_keys
 
     lambda_handler({
-        'published_dataset_id': S3_PREFIX_TO_DELETE,
+        'published_dataset_id': DATASET_TO_DELETE,
         'published_dataset_version': dataset_version,
         'publish_bucket': PUBLISH_BUCKET,
         'embargo_bucket': EMBARGO_BUCKET,
@@ -644,7 +652,7 @@ def test_v5_required_event_parameter(setup):
 def test_v5_failure_required_event_parameter(setup):
     with pytest.raises(Exception) as e:
         lambda_handler({
-            'published_dataset_id': S3_PREFIX_TO_DELETE,
+            'published_dataset_id': DATASET_TO_DELETE,
             'publish_bucket': PUBLISH_BUCKET,
             'embargo_bucket': EMBARGO_BUCKET,
             'workflow_id': '5',
@@ -655,13 +663,13 @@ def test_v5_failure_required_event_parameter(setup):
 
 # Testing a test helper, because the logic was more complicated than expected.
 def test_is_delete_marker(publish_bucket):
-    simple_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, "simple.txt")
+    simple_key = '{}/{}'.format(DATASET_TO_DELETE, "simple.txt")
     publish_bucket.upload_file(FILENAME, simple_key)
 
     assert not is_delete_marker(publish_bucket, simple_key)
     assert not is_delete_marker(publish_bucket, simple_key, publish_bucket.Object(simple_key).version_id)
 
-    versions_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, "versions.txt")
+    versions_key = '{}/{}'.format(DATASET_TO_DELETE, "versions.txt")
 
     # V1
     publish_bucket.upload_file(FILENAME, versions_key)
@@ -687,7 +695,7 @@ def test_is_delete_marker(publish_bucket):
         is_delete_marker(publish_bucket, versions_key, 'fake-version-id')
 
     # tests with a key that does not exist in bucket at all
-    no_obj_key = '{}/{}'.format(S3_PREFIX_TO_DELETE, 'notuploaded.txt')
+    no_obj_key = '{}/{}'.format(DATASET_TO_DELETE, 'notuploaded.txt')
     with pytest.raises(botocore.exceptions.ClientError):
         is_delete_marker(publish_bucket, no_obj_key)
     with pytest.raises(botocore.exceptions.ClientError):
