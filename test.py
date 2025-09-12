@@ -631,7 +631,9 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert version_id_to_is_latest[undeleted_v2]
 
 
-def test_v4_required_event_parameter(setup):
+def test_v4_missing_s3_key_prefix(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
     with pytest.raises(KeyError) as e:
         lambda_handler({
             'publish_bucket': PUBLISH_BUCKET,
@@ -641,8 +643,45 @@ def test_v4_required_event_parameter(setup):
         }, {})
     assert 's3_key_prefix' in str(e.value)
 
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
 
-def test_v5_required_event_parameter(setup):
+
+def test_v4_empty_s3_key_prefix(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
+    with pytest.raises(AssertionError):
+        lambda_handler({
+            's3_key_prefix': '',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '4',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+    with pytest.raises(AssertionError):
+        lambda_handler({
+            's3_key_prefix': '  ',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '4',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+
+def test_v5_missing_published_dataset_id(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
+
     with pytest.raises(KeyError) as e:
         lambda_handler({
             'publish_bucket': PUBLISH_BUCKET,
@@ -652,8 +691,49 @@ def test_v5_required_event_parameter(setup):
         }, {})
     assert 'published_dataset_id' in str(e.value)
 
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
 
-def test_v5_failure_required_event_parameter(setup):
+
+def test_v5_empty_published_dataset_id(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
+
+    with pytest.raises(ValueError) as e:
+        lambda_handler({
+            'published_dataset_id': '',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageInitial
+        }, {})
+    assert 'dataset_id cannot be empty' in str(e.value)
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+    with pytest.raises(ValueError) as e:
+        lambda_handler({
+            'published_dataset_id': '  ',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageInitial
+        }, {})
+    assert 'dataset_id cannot be empty' in str(e.value)
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+
+# published_dataset_version is only required for v5 CleanupStageFailure
+def test_v5_failure_missing_published_dataset_version(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
+
     with pytest.raises(Exception) as e:
         lambda_handler({
             'published_dataset_id': DATASET_TO_DELETE,
@@ -663,6 +743,45 @@ def test_v5_failure_required_event_parameter(setup):
             'cleanup_stage': CleanupStageFailure
         }, {})
     assert PublishedDatasetVersionKey in str(e.value)
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+
+def test_v5_failure_empty_published_dataset_version(publish_bucket, embargo_bucket, asset_bucket):
+    publish_keys, asset_keys = create_publish_files(publish_bucket, embargo_bucket, asset_bucket, DATASET_TO_KEEP, 1,
+                                                    True)
+
+    with pytest.raises(Exception) as e:
+        lambda_handler({
+            'published_dataset_id': DATASET_TO_DELETE,
+            PublishedDatasetVersionKey: '',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+    assert PublishedDatasetVersionKey in str(e.value)
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
+
+    with pytest.raises(Exception) as e:
+        lambda_handler({
+            'published_dataset_id': DATASET_TO_DELETE,
+            PublishedDatasetVersionKey: '  ',
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+    assert PublishedDatasetVersionKey in str(e.value)
+
+    assert s3_keys(publish_bucket) == publish_keys
+    assert s3_keys(embargo_bucket) == publish_keys
+    assert s3_keys(asset_bucket) == asset_keys
 
 
 # Testing a test helper, because the logic was more complicated than expected.

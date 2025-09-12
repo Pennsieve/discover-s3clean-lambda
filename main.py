@@ -21,6 +21,10 @@ class S3CleanConfig:
     dataset_version: str
     tidy_enabled: bool
 
+    def __post_init__(self):
+        if len(self.dataset_id) == 0:
+            raise ValueError('dataset_id cannot be empty')
+
 
 class WithLogging:
     def logger(class_name):
@@ -243,14 +247,14 @@ def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPagi
         tidy_enabled = is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env)
 
         if workflow_id == 5:
-            dataset_id = event["published_dataset_id"]
-            dataset_version = event.get(PublishedDatasetVersionKey, NoPublishedDatasetVersion)
+            dataset_id = event["published_dataset_id"].strip()
+            dataset_version = event.get(PublishedDatasetVersionKey, NoPublishedDatasetVersion).strip()
             s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id,
                                             cleanup_stage, workflow_id, dataset_id, dataset_version,
                                             tidy_enabled)
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
-            s3_key_prefix = event['s3_key_prefix']
+            s3_key_prefix = event['s3_key_prefix'].strip()
             if cleanup_stage == CleanupStageTidy:
                 tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
             else:
@@ -340,7 +344,7 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
         purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageFailure:
-        if s3_clean_config.dataset_version == NoPublishedDatasetVersion:
+        if s3_clean_config.dataset_version == NoPublishedDatasetVersion or len(s3_clean_config.dataset_version) == 0:
             raise Exception(f"missing required event parameter '{PublishedDatasetVersionKey}'")
         purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config)
 
