@@ -332,7 +332,7 @@ def test_cleanup_state_unpublish(publish_bucket, embargo_bucket, asset_bucket):
 
 # this does not test the handling of file actions
 def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
-    dataset_version = 1
+    dataset_version = "1"
 
     publish_keys, asset_keys = create_publish_files(publish_bucket,
                                                     embargo_bucket,
@@ -367,7 +367,7 @@ def test_cleanup_state_failure(publish_bucket, embargo_bucket, asset_bucket):
 
 def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     dataset_id = DATASET_TO_DELETE
-    dataset_version = 2
+    dataset_version = "2"
 
     created_keys = set()
     file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
@@ -477,7 +477,7 @@ def test_undo_copy_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 # a keep file action in an embargoed publish.
 def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     dataset_id = DATASET_TO_DELETE
-    dataset_version = 2
+    dataset_version = "2"
 
     created_keys = set()
     file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
@@ -536,7 +536,7 @@ def test_undo_keep_on_failure(publish_bucket, embargo_bucket, asset_bucket):
 # a delete file action in an embargoed publish.
 def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     dataset_id = DATASET_TO_DELETE
-    dataset_version = 3
+    dataset_version = "3"
 
     expected_pre_clean_keys = set()
     file_action_key = '{}/{}'.format(dataset_id, FileActionKey)
