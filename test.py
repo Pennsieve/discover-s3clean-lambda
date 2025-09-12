@@ -23,7 +23,8 @@ if 'ENVIRONMENT' not in os.environ:
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
     MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
     CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
-    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep
+    FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep, \
+    PublishedDatasetVersionKey
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -616,6 +617,40 @@ def test_undo_delete_on_failure(publish_bucket, embargo_bucket, asset_bucket):
     assert len(version_id_to_is_latest) == 2
     assert not version_id_to_is_latest[undeleted_v1]
     assert version_id_to_is_latest[undeleted_v2]
+
+
+def test_v4_required_event_parameter(setup):
+    with pytest.raises(KeyError) as e:
+        lambda_handler({
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '4',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+    assert 's3_key_prefix' in str(e.value)
+
+
+def test_v5_required_event_parameter(setup):
+    with pytest.raises(KeyError) as e:
+        lambda_handler({
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageInitial
+        }, {})
+    assert 'published_dataset_id' in str(e.value)
+
+
+def test_v5_failure_required_event_parameter(setup):
+    with pytest.raises(Exception) as e:
+        lambda_handler({
+            'published_dataset_id': S3_PREFIX_TO_DELETE,
+            'publish_bucket': PUBLISH_BUCKET,
+            'embargo_bucket': EMBARGO_BUCKET,
+            'workflow_id': '5',
+            'cleanup_stage': CleanupStageFailure
+        }, {})
+    assert PublishedDatasetVersionKey in str(e.value)
 
 
 # Testing a test helper, because the logic was more complicated than expected.
