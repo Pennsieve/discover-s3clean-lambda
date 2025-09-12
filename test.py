@@ -32,11 +32,15 @@ ASSET_BUCKET = 'test-discover-assets'
 DATASET_ASSETS_KEY_PREFIX = 'dataset-assets'
 
 # This key corresponds to assets belonging to a dataset
-# that is either being unpublished or was not published successfully
+# that is either being unpublished or was not published successfully.
+# Chosen to be a substring prefix of DATASET_TO_KEEP so that tests catch missing
+# final '/'s which will lead paginator-based deletes to delete more than we want.
 DATASET_TO_DELETE = '11'
 
 # This key corresponds to assets belonging to a dataset version
-# that should remain untouched by this lambda function
+# that should remain untouched by this lambda function.
+# Chosen to contain f DATASET_TO_DELETE as a prefix so that tests catch missing
+# final '/'s which will lead paginator-based deletes to delete more than we want.
 DATASET_TO_KEEP = '111'
 
 # This is a dummy file
