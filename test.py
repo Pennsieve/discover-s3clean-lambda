@@ -24,7 +24,7 @@ from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, R
     MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
     CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
     FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep, \
-    PublishedDatasetVersionKey, MetadataAssetsKey
+    PublishedDatasetVersionKey, MetadataAssetsKey, FileActionDelete
 
 PUBLISH_BUCKET = 'test-discover-publish'
 EMBARGO_BUCKET = 'test-discover-embargo'
@@ -233,6 +233,69 @@ def test_cleanup_state_initial(publish_bucket, embargo_bucket):
 
     assert s3_keys(publish_bucket) == post_clean_expected_keys
     assert s3_keys(embargo_bucket) == post_clean_expected_keys
+
+
+def test_cleanup_state_initial_cleanup_file_contents(publish_bucket, embargo_bucket):
+    revision_key_to_delete = '{}/{}/{}'.format(DATASET_TO_DELETE, RevisionsPrefix, FILENAME)
+
+    metadata_key_to_delete = '{}/{}/{}'.format(DATASET_TO_DELETE, MetadataPrefix, FILENAME)
+
+    # upload file and return the expected file action associated with the key
+    def upload(bucket, key: str) -> dict:
+        bucket.upload_file(Filename=FILENAME, Key=key)
+        expected_action = {
+            "action": FileActionDelete,
+            "bucket": bucket.name,
+            "path": key,
+            "versionId": 'null'
+        }
+        if bucket.Versioning().status == 'Enabled':
+            object_version_id = bucket.Object(key).version_id
+            expected_action['versionId'] = object_version_id
+        return expected_action
+
+    expected_publish_bucket_revision_file_action = upload(publish_bucket, revision_key_to_delete)
+    expected_publish_bucket_metadata_file_action = upload(publish_bucket, metadata_key_to_delete)
+
+    expected_embargo_bucket_revision_file_action = upload(embargo_bucket, revision_key_to_delete)
+    expected_embargo_bucket_metadata_file_action = upload(embargo_bucket, metadata_key_to_delete)
+
+    pre_clean_expected_keys = {
+        revision_key_to_delete,
+        metadata_key_to_delete,
+    }
+    assert s3_keys(publish_bucket) == pre_clean_expected_keys
+    assert s3_keys(embargo_bucket) == pre_clean_expected_keys
+
+    # RUN LAMBDA
+    lambda_handler({
+        'published_dataset_id': DATASET_TO_DELETE,
+        'publish_bucket': PUBLISH_BUCKET,
+        'embargo_bucket': EMBARGO_BUCKET,
+        'workflow_id': '5',
+        'cleanup_stage': CleanupStageInitial
+    }, {})
+
+    revisions_cleanup_key = '{}/{}'.format(DATASET_TO_DELETE, RevisionsCleanupKey)
+    metadata_cleanup_key = '{}/{}'.format(DATASET_TO_DELETE, MetadataCleanupKey)
+    post_clean_expected_keys = {
+        revisions_cleanup_key,
+        metadata_cleanup_key,
+    }
+
+    assert s3_keys(publish_bucket) == post_clean_expected_keys
+    assert s3_keys(embargo_bucket) == post_clean_expected_keys
+
+    def check(bucket, cleanup_key, expected_action):
+        file_actions = json.loads(bucket.Object(cleanup_key).get()['Body'].read())[FileActionListTag]
+        assert len(file_actions) == 1
+        assert file_actions[0] == expected_action
+
+    check(publish_bucket, revisions_cleanup_key, expected_publish_bucket_revision_file_action)
+    check(publish_bucket, metadata_cleanup_key, expected_publish_bucket_metadata_file_action)
+
+    check(embargo_bucket, revisions_cleanup_key, expected_embargo_bucket_revision_file_action)
+    check(embargo_bucket, metadata_cleanup_key, expected_embargo_bucket_metadata_file_action)
 
 
 def test_cleanup_state_tidy(publish_bucket, embargo_bucket):
