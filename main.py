@@ -427,7 +427,7 @@ def cleanup_dataset_metadata(log, s3_client, s3_clean_config):
 def cleanup_dataset_folders(log, s3_client, bucket_list, dataset_id, folder_prefix, folder_cleanup_key):
     log.info(
         f"cleanup_dataset_folders() dataset_id: {dataset_id} folder_prefix: {folder_prefix} folder_cleanup_key: {folder_cleanup_key} bucket_list: {bucket_list}")
-    key_prefix = f"{dataset_id}/{folder_prefix}"
+    key_prefix = f"{dataset_id}/{folder_prefix}/"
     cleanup_file = f"{dataset_id}/{folder_cleanup_key}" if folder_cleanup_key is not None else None
     cleanup_buckets(log,
                     s3_client,
