@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 
 import structlog
 
+
 @dataclass
 class S3CleanConfig:
     """S3 Clean Invocation Config"""
@@ -14,12 +15,16 @@ class S3CleanConfig:
     assets_prefix: str
     publish_bucket_id: str
     embargo_bucket_id: str
-    s3_key_prefix: str
     cleanup_stage: str
     workflow_id: int
     dataset_id: str
     dataset_version: str
     tidy_enabled: bool
+
+    def __post_init__(self):
+        if len(self.dataset_id) == 0:
+            raise ValueError('dataset_id cannot be empty')
+
 
 class WithLogging:
     def logger(class_name):
@@ -28,30 +33,30 @@ class WithLogging:
         log.bind(pennsieve={'service_name': class_name})
         return log
 
+
 class RequestPayer:
-    def __init__(self, is_requestor_pays = True):
+    def __init__(self, is_requestor_pays=True):
         self.is_requestor_pays = is_requestor_pays
 
     def __call__(self):
         return {'RequestPayer': 'requester'} if self.is_requestor_pays else {}
 
+
 class S3Paginator:
     log = WithLogging.logger('S3Paginator')
-    s3 = boto3.client("s3")
-    paginator = None
-    requestor_pays = None
 
-    def init(paginator, is_requestor_pays = True):
+    def __init__(self, paginator, is_requestor_pays=True):
         S3Paginator.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
-        S3Paginator.requestor_pays = RequestPayer(is_requestor_pays)
-        S3Paginator.paginator = paginator
+        self.requestor_pays = RequestPayer(is_requestor_pays)
+        self.wrapped_paginator = paginator
 
-    def paginate(Bucket, Prefix, PaginationConfig={'PageSize': 1000}, **kwargs):
+    def paginate(self, Bucket, Prefix, PaginationConfig={'PageSize': 1000}, **kwargs):
         S3Paginator.log.info(f"paginate() Bucket: {Bucket} Prefix: {Prefix} PaginationConfig: {PaginationConfig}")
-        return S3Paginator.paginator.paginate(Bucket=Bucket,
-                                              Prefix=Prefix,
-                                              PaginationConfig=PaginationConfig,
-                                              **S3Paginator.requestor_pays())
+        return self.wrapped_paginator.paginate(Bucket=Bucket,
+                                               Prefix=Prefix,
+                                               PaginationConfig=PaginationConfig,
+                                               **self.requestor_pays())
+
 
 class S3Client:
     log = WithLogging.logger('S3Client')
@@ -59,7 +64,7 @@ class S3Client:
     is_requestor_pays = True
     requestor_pays = None
 
-    def init(endpoint_url = None, is_requestor_pays = True):
+    def init(endpoint_url=None, is_requestor_pays=True):
         S3Client.log.info(f"init() is_requestor_pays: {is_requestor_pays}")
         S3Client.is_requestor_pays = is_requestor_pays
         S3Client.requestor_pays = RequestPayer(is_requestor_pays)
@@ -67,9 +72,8 @@ class S3Client:
 
     def get_paginator(operation_name):
         S3Client.log.info(f"get_paginator() operation_name: {operation_name}")
-        S3Paginator.init(S3Client.s3.get_paginator(operation_name),
-                         S3Client.is_requestor_pays)
-        return S3Paginator
+        return S3Paginator(S3Client.s3.get_paginator(operation_name),
+                           S3Client.is_requestor_pays)
 
     def list_object_versions(Bucket, Prefix):
         S3Client.log.info(f"list_object_versions() Bucket: {Bucket} Prefix: {Prefix}")
@@ -106,6 +110,7 @@ class S3Client:
         S3Client.log.info(f"delete_objects() Bucket: {Bucket} number-of-items: {len(Delete)}")
         return S3Client.s3.delete_objects(Bucket=Bucket, Delete=Delete, **S3Client.requestor_pays())
 
+
 # Configure JSON logs in a format that ELK can understand
 # --------------------------------------------------
 def rewrite_event_to_message(logger, name, event_dict):
@@ -139,8 +144,10 @@ SERVICE_NAME = os.environ['SERVICE_NAME']
 TIER = os.environ['TIER']
 FULL_SERVICE_NAME = f'{SERVICE_NAME}-{TIER}'
 
-if ENVIRONMENT == 'local':
+if ENVIRONMENT == 'docker':
     S3_URL = 'http://localstack:4566'
+elif ENVIRONMENT == 'local':
+    S3_URL = 'http://localhost:4566'
 else:
     S3_URL = None
 
@@ -187,6 +194,9 @@ Default_TidyEnabled = True
 
 NoValue = "(none)"
 
+PublishedDatasetVersionKey = "published_dataset_version"
+NoPublishedDatasetVersion = "-1"
+
 PublishingIntermediateFiles = [FileActionKey,
                                GraphAssetsKey,
                                MetadataAssetsKey,
@@ -196,11 +206,13 @@ PublishingIntermediateFiles = [FileActionKey,
                                MetadataCleanupKey,
                                ReleaseAssetsListing]
 
+
 def str_to_bool(s):
     if s is not None:
         return s.upper() == "TRUE"
     else:
         return False
+
 
 def is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env):
     if tidy_enabled_evt is not None:
@@ -209,6 +221,7 @@ def is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env):
         return str_to_bool(tidy_enabled_env)
     else:
         return Default_TidyEnabled
+
 
 def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPaginator):
     # Create basic Pennsieve log context
@@ -221,37 +234,44 @@ def lambda_handler(event, context, s3_client=S3Client, s3_paginator=S3ClientPagi
         log.info('Reading environment')
         asset_bucket_id = os.environ['ASSET_BUCKET']
         assets_prefix = os.environ['DATASET_ASSETS_KEY_PREFIX']
-        tidy_enabled_env = os.environ.get("TIDY_ENABLED","TRUE")
+        tidy_enabled_env = os.environ.get("TIDY_ENABLED", "TRUE")
 
         log.info('Parsing event')
 
         publish_bucket_id = event['publish_bucket']
         embargo_bucket_id = event['embargo_bucket']
-        s3_key_prefix = event['s3_key_prefix']
+
         cleanup_stage = event.get("cleanup_stage", CleanupStageInitial)
         workflow_id = int(event.get("workflow_id", "4"))
-        dataset_id = event.get("published_dataset_id","-1")
-        dataset_version = event.get("published_dataset_version", "-1")
+
         tidy_enabled_evt = event.get("tidy_enabled")
 
         tidy_enabled = is_tidy_enabled(tidy_enabled_evt, tidy_enabled_env)
 
-        s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, cleanup_stage, workflow_id, dataset_id, dataset_version, tidy_enabled)
-
         if workflow_id == 5:
+            dataset_id = event["published_dataset_id"].strip()
+            dataset_version = event.get(PublishedDatasetVersionKey, NoPublishedDatasetVersion).strip()
+            s3_clean_config = S3CleanConfig(asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id,
+                                            cleanup_stage, workflow_id, dataset_id, dataset_version,
+                                            tidy_enabled)
             purge_v5(log, s3_client, s3_paginator, s3_clean_config)
         else:
+            s3_key_prefix = event['s3_key_prefix'].strip()
             if cleanup_stage == CleanupStageTidy:
                 tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix)
             else:
-                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix, s3_client, s3_paginator)
+                purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix,
+                         s3_client, s3_paginator)
 
     except Exception as e:
         log.error(e, exc_info=True)
         raise
 
-def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix_evt, s3_client, s3_paginator):
-    log.info(f"purge_v4() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix_evt: {s3_key_prefix_evt}")
+
+def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_bucket_id, s3_key_prefix_evt, s3_client,
+             s3_paginator):
+    log.info(
+        f"purge_v4() asset_bucket_id: {asset_bucket_id} assets_prefix: {assets_prefix} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix_evt: {s3_key_prefix_evt}")
     try:
         # Ensure the S3 key ends with a '/'
         if s3_key_prefix_evt.endswith('/'):
@@ -277,14 +297,17 @@ def purge_v4(log, asset_bucket_id, assets_prefix, publish_bucket_id, embargo_buc
         log.error(e, exc_info=True)
         raise
 
+
 def tidy_v4(log, tidy_enabled, s3_client, publish_bucket_id, embargo_bucket_id, s3_key_prefix):
-    log.info(f"tidy_v4() tidy_enabled: {tidy_enabled} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix: {s3_key_prefix}")
+    log.info(
+        f"tidy_v4() tidy_enabled: {tidy_enabled} publish_bucket_id: {publish_bucket_id} embargo_bucket_id: {embargo_bucket_id} s3_key_prefix: {s3_key_prefix}")
     if tidy_enabled:
         log.info(f"tidy_v4() removing intermediate publishing files")
         for bucket_id in [publish_bucket_id, embargo_bucket_id]:
             tidy_publication_directory(log, s3_client, bucket_id, s3_key_prefix)
     else:
         log.info(f"tidy_v4() requested but disabled")
+
 
 def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
     requester_pays = {'RequestPayer': 'requester'} if is_requester_pays else {}
@@ -309,6 +332,7 @@ def delete(s3_client, s3_paginator, bucket, prefix, is_requester_pays=False):
             if len(items_to_delete['Objects']):
                 s3_client.delete_objects(Bucket=bucket, Delete=items_to_delete, **requester_pays)
 
+
 def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
     log.info(f"purge_v5() {s3_clean_config.cleanup_stage} config: {s3_clean_config}")
 
@@ -322,20 +346,25 @@ def purge_v5(log, s3_client, s3_paginator, s3_clean_config):
         purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config)
 
     if s3_clean_config.cleanup_stage == CleanupStageFailure:
+        if s3_clean_config.dataset_version == NoPublishedDatasetVersion or len(s3_clean_config.dataset_version) == 0:
+            raise Exception(f"missing required event parameter '{PublishedDatasetVersionKey}'")
         purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config)
+
 
 def purge_v5_initial(log, s3_client, s3_clean_config):
     log.info(f"purge_v5_initial() preparing space for publication")
     cleanup_dataset_revisions(log, s3_client, s3_clean_config)
     cleanup_dataset_metadata(log, s3_client, s3_clean_config)
 
+
 def purge_v5_tidy(log, s3_client, s3_clean_config):
     if s3_clean_config.tidy_enabled:
         log.info(f"purge_v5_tidy() removing intermediate publishing files")
         for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
-            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.dataset_id)
     else:
         log.info(f"purge_v5_tidy() requested but disabled")
+
 
 def purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config):
     log.info(f"purge_v5_unpublish() will remove all versions and all files")
@@ -352,6 +381,7 @@ def purge_v5_unpublish(log, s3_client, s3_paginator, s3_clean_config):
                                  s3_clean_config.dataset_id,
                                  None)
 
+
 def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
     log.info(f"purge_v5_failure() undo publishing actions and clean public assets bucket")
 
@@ -362,7 +392,7 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
         delete_metadata_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         if s3_clean_config.tidy_enabled:
-            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.s3_key_prefix)
+            tidy_publication_directory(log, s3_client, bucket_id, s3_clean_config.dataset_id)
 
     # Clean up the Public Assets Bucket
     cleanup_public_assets_bucket(log,
@@ -373,6 +403,7 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
                                  s3_clean_config.dataset_id,
                                  s3_clean_config.dataset_version)
 
+
 def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_revisions() {s3_clean_config.dataset_id}")
     cleanup_dataset_folders(log,
@@ -381,6 +412,7 @@ def cleanup_dataset_revisions(log, s3_client, s3_clean_config):
                             s3_clean_config.dataset_id,
                             RevisionsPrefix,
                             RevisionsCleanupKey)
+
 
 def cleanup_dataset_metadata(log, s3_client, s3_clean_config):
     log.info(f"cleanup_dataset_metadata() {s3_clean_config.dataset_id}")
@@ -391,8 +423,10 @@ def cleanup_dataset_metadata(log, s3_client, s3_clean_config):
                             MetadataPrefix,
                             MetadataCleanupKey)
 
+
 def cleanup_dataset_folders(log, s3_client, bucket_list, dataset_id, folder_prefix, folder_cleanup_key):
-    log.info(f"cleanup_dataset_folders() dataset_id: {dataset_id} folder_prefix: {folder_prefix} folder_cleanup_key: {folder_cleanup_key} bucket_list: {bucket_list}")
+    log.info(
+        f"cleanup_dataset_folders() dataset_id: {dataset_id} folder_prefix: {folder_prefix} folder_cleanup_key: {folder_cleanup_key} bucket_list: {bucket_list}")
     key_prefix = f"{dataset_id}/{folder_prefix}"
     cleanup_file = f"{dataset_id}/{folder_cleanup_key}" if folder_cleanup_key is not None else None
     cleanup_buckets(log,
@@ -401,6 +435,7 @@ def cleanup_dataset_folders(log, s3_client, bucket_list, dataset_id, folder_pref
                     key_prefix,
                     cleanup_file)
 
+
 def cleanup_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
     log.info(f"cleanup_buckets() key_prefix: {key_prefix} cleanup_file: {cleanup_file} bucket_list: {bucket_list}")
 
@@ -408,8 +443,10 @@ def cleanup_buckets(log, s3_client, bucket_list, key_prefix, cleanup_file):
         log.info(f"cleanup_buckets() processing bucket_id: {bucket_id}")
         file_actions = remove_files_from_bucket(log, s3_client, bucket_id, key_prefix)
         if file_actions is not None and len(file_actions.get(FileActionListTag, [])) > 0:
-            log.info(f"cleanup_buckets() bucket_id: {bucket_id} cleaned up {len(file_actions.get(FileActionListTag))} files")
+            log.info(
+                f"cleanup_buckets() bucket_id: {bucket_id} cleaned up {len(file_actions.get(FileActionListTag))} files")
             write_json_file_to_s3(log, s3_client, bucket_id, cleanup_file, json.dumps(file_actions))
+
 
 def remove_files_from_bucket(log, s3_client, bucket_id, key_prefix):
     log.info(f"remove_files_from_bucket() bucket_id: {bucket_id} key_prefix: {key_prefix}")
@@ -419,10 +456,13 @@ def remove_files_from_bucket(log, s3_client, bucket_id, key_prefix):
     file_action_list = [remove_file(log, s3_client, bucket_id, file) for file in file_list]
     return {FileActionListTag: file_action_list}
 
-def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id = None):
-    log.info(f"cleanup_public_assets_bucket() bucket_id: {bucket_id} prefix: {prefix} dataset_id: {dataset_id} version_id: {version_id}")
+
+def cleanup_public_assets_bucket(log, s3_client, s3_paginator, bucket_id, prefix, dataset_id, version_id=None):
+    log.info(
+        f"cleanup_public_assets_bucket() bucket_id: {bucket_id} prefix: {prefix} dataset_id: {dataset_id} version_id: {version_id}")
     dataset_assets_prefix = public_assets_prefix(prefix, dataset_id, version_id)
     delete(s3_client, s3_paginator, bucket_id, dataset_assets_prefix)
+
 
 def get_list_of_files(log, s3_client, bucket_id, prefix):
     '''
@@ -436,9 +476,11 @@ def get_list_of_files(log, s3_client, bucket_id, prefix):
     log.info(f"get_list_of_files() bucket_id: {bucket_id} prefix: {prefix}")
     paginator = s3_client.get_paginator('list_object_versions')
     bucket_listing = [file
-                      for page in paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
+                      for page in
+                      paginator.paginate(Bucket=bucket_id, Prefix=prefix, PaginationConfig={'PageSize': 1000})
                       for file in page.get("Versions", []) if file.get("IsLatest")]
     return bucket_listing
+
 
 def remove_file(log, s3_client, bucket_id, file):
     '''
@@ -460,6 +502,7 @@ def remove_file(log, s3_client, bucket_id, file):
         "versionId": version
     }
 
+
 def delete_all_versions(log, s3_client, bucket_id, dataset_id):
     log.info(f"delete_all_versions() bucket_id: {bucket_id} dataset_id: {dataset_id}")
 
@@ -471,7 +514,7 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
     # delete all the files
     for page in pages:
         for o in page.get("DeleteMarkers", []) + page.get("Versions", []):
-            key = o.get("Key","")
+            key = o.get("Key", "")
             folder = key[-1] == '/'
             if folder:
                 # object is a folder, put it on a list to delete at the end
@@ -487,6 +530,7 @@ def delete_all_versions(log, s3_client, bucket_id, dataset_id):
         key = o.get("Key")
         version = o.get("VersionId")
         delete_object_version(s3_client, bucket_id, key, version)
+
 
 def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
     '''
@@ -510,6 +554,7 @@ def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
                 s3_key = s3_key_path(dataset_id, s3_path)
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
+
 
 def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
     '''
@@ -555,6 +600,7 @@ def delete_metadata_assets(log, s3_client, s3_bucket, dataset_id):
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
+
 def undo_actions(log, s3_client, bucket_id, dataset_id):
     '''
     This will undo the actions performed during the dataset publishing process. It will remove new files copied, and restore files that were deleted or replaced.
@@ -584,14 +630,17 @@ def undo_actions(log, s3_client, bucket_id, dataset_id):
         else:
             log.info(f"undo_actions() invalid file_action: {file_action}")
 
+
 def valid_file_action(file_action):
     return all([field in file_action for field in FileActionRequiredFields])
+
 
 def tidy_publication_directory(log, s3_client, s3_bucket_id, s3_key_prefix):
     log.info(f"tidy_publication_directory() s3_bucket_id: {s3_bucket_id} s3_key_prefix: {s3_key_prefix}")
     for file_name in PublishingIntermediateFiles:
         s3_key = s3_key_path(s3_key_prefix, file_name)
         delete_all_object_versions(log, s3_client, s3_bucket_id, s3_key)
+
 
 def undo_copy(log, s3_client, file_action):
     log.info(f"undo_copy() file_action: {file_action}")
@@ -607,6 +656,7 @@ def undo_copy(log, s3_client, file_action):
     else:
         restore_version(log, s3_client, s3_bucket, s3_key, s3_version)
 
+
 def undo_keep(log, s3_client, file_action):
     log.info(f"undo_keep() file_action: {file_action}")
     s3_bucket = file_action.get(FileActionBucketTag)
@@ -614,12 +664,14 @@ def undo_keep(log, s3_client, file_action):
     s3_version = file_action.get(FileActionVersionTag)
     restore_version(log, s3_client, s3_bucket, s3_key, s3_version)
 
+
 def undo_delete(log, s3_client, file_action):
     log.info(f"undo_delete() file_action: {file_action}")
     s3_bucket = file_action.get(FileActionBucketTag)
     s3_key = file_action.get(FileActionPathTag)
     s3_version = file_action.get(FileActionVersionTag)
     restore_version(log, s3_client, s3_bucket, s3_key, s3_version)
+
 
 def restore_version(log, s3_client, s3_bucket, s3_key, s3_version):
     log.info(f"restore_version() bucket: {s3_bucket} key: {s3_key} version: {s3_version}")
@@ -638,20 +690,24 @@ def restore_version(log, s3_client, s3_bucket, s3_key, s3_version):
                 log.info(f"restore_version() removing version: {latest_version}")
                 delete_object_version(s3_client, s3_bucket, s3_key, latest_version)
     else:
-        log.info(f"restore_version() cannot restore without a valid object version (bucket: {s3_bucket} key: {s3_key} version: {s3_version})")
+        log.info(
+            f"restore_version() cannot restore without a valid object version (bucket: {s3_bucket} key: {s3_key} version: {s3_version})")
+
 
 def get_object_versions(s3_client, s3_bucket, s3_key):
     response = s3_client.list_object_versions(Bucket=s3_bucket, Prefix=s3_key)
     versions = extract_versions(response)
     return versions
 
+
 def extract_versions(response):
     # extract Delete Markers and Versions from the response
-    versions = (response.get(S3DeleteMarkersTag,[]) + response.get(S3VersionsTag,[]))
+    versions = (response.get(S3DeleteMarkersTag, []) + response.get(S3VersionsTag, []))
     # sort the Versions by timestamp (most recent to oldest)
-    versions.sort(key = lambda x:x[S3LastModifiedTag])
+    versions.sort(key=lambda x: x[S3LastModifiedTag])
     versions.reverse()
     return versions
+
 
 def find_latest_version(versions):
     latest_list = []
@@ -663,8 +719,10 @@ def find_latest_version(versions):
     else:
         return None
 
+
 def is_latest(item):
     return item.get(S3IsLatestTag, False)
+
 
 def write_json_file_to_s3(log, s3_client, bucket, key, json_data):
     log.info(f"write_json_file_to_s3() bucket: {bucket} key: {bucket}")
@@ -674,6 +732,7 @@ def write_json_file_to_s3(log, s3_client, bucket, key, json_data):
         Key=key
     )
     # TODO: check response for success/failure
+
 
 def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
     '''
@@ -697,6 +756,7 @@ def load_json_file_from_s3(log, s3_client, s3_bucket, s3_key):
     json_file = json.loads(s3_object["Body"].read())
     return json_file
 
+
 def load_dataset_file_actions(log, s3_client, bucket_id, dataset_id):
     '''
     Loads files from the publishing S3 bucket that contain FileActionItem (copy, keep, delete), from publishing and revision cleanup.
@@ -707,8 +767,9 @@ def load_dataset_file_actions(log, s3_client, bucket_id, dataset_id):
     :return: combined List of File Actions
     '''
     return load_file_actions(log, s3_client, bucket_id, dataset_id, FileActionKey) + \
-           load_file_actions(log, s3_client, bucket_id, dataset_id, RevisionsCleanupKey) + \
-           load_file_actions(log, s3_client, bucket_id, dataset_id, MetadataCleanupKey)
+        load_file_actions(log, s3_client, bucket_id, dataset_id, RevisionsCleanupKey) + \
+        load_file_actions(log, s3_client, bucket_id, dataset_id, MetadataCleanupKey)
+
 
 def load_file_actions(log, s3_client, bucket_id, dataset_id, file_action_key):
     '''
@@ -729,6 +790,7 @@ def load_file_actions(log, s3_client, bucket_id, dataset_id, file_action_key):
         log.info(f"load_file_actions() NotFound bucket_id: {bucket_id} dataset_id: {dataset_id} s3_key: {s3_key}")
         return []
 
+
 def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_all_object_versions() bucket: {s3_bucket} key: {s3_key}")
     versions = get_object_versions(s3_client, s3_bucket, s3_key)
@@ -740,18 +802,22 @@ def delete_all_object_versions(log, s3_client, s3_bucket, s3_key):
             else:
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
+
 def delete_object(log, s3_client, s3_bucket, s3_key):
     log.info(f"delete_object() s3_bucket: {s3_bucket} s3_key: {s3_key}")
     s3_client.delete_object(Bucket=s3_bucket, Key=s3_key)
 
+
 def delete_object_version(s3_client, s3_bucket, s3_key, s3_version):
     s3_client.delete_object(Bucket=s3_bucket, Key=s3_key, VersionId=s3_version)
 
+
 def public_assets_prefix(prefix, dataset_id, version_id):
     if version_id is None:
-        return f"{prefix}/{dataset_id}"
+        return f"{prefix}/{dataset_id}/"
     else:
-        return f"{prefix}/{dataset_id}/{version_id}"
+        return f"{prefix}/{dataset_id}/{version_id}/"
+
 
 def s3_key_path(prefix, suffix):
     separator = "" if prefix.endswith("/") else "/"
