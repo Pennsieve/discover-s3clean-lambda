@@ -965,7 +965,7 @@ def create_publish_files(publish_bucket, embargo_bucket, asset_bucket, dataset_i
                                                      include_intermediate_files)
 
     metadata_keys = create_metadata_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files)
-    keys = keys.union(metadata_keys)
+    keys = publish_keys.union(metadata_keys)
 
     if include_intermediate_files:
         for name in PublishingIntermediateFiles:
