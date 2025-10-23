@@ -22,7 +22,7 @@ if 'ENVIRONMENT' not in os.environ:
 
 from main import lambda_handler, S3_URL, CleanupStageInitial, RevisionsPrefix, RevisionsCleanupKey, MetadataPrefix, \
     MetadataCleanupKey, CleanupStageTidy, PublishingIntermediateFiles, CleanupStageUnpublish, \
-    CleanupStageFailure, DatasetAssetsKey, GraphAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
+    CleanupStageFailure, DatasetAssetsKey, FileActionKey, FileActionListTag, FileActionTag, \
     FileActionBucketTag, FileActionPathTag, FileActionVersionTag, FileActionCopy, FileActionKeep, \
     PublishedDatasetVersionKey, MetadataAssetsKey, FileActionDelete
 
@@ -964,15 +964,13 @@ def create_publish_files(publish_bucket, embargo_bucket, asset_bucket, dataset_i
                                                      dataset_version,
                                                      include_intermediate_files)
 
-    graph_keys = create_graph_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files)
-    keys = publish_keys.union(graph_keys)
     metadata_keys = create_metadata_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files)
     keys = keys.union(metadata_keys)
 
     if include_intermediate_files:
         for name in PublishingIntermediateFiles:
             # these were already created by the functions above if include_intermediate_files == True
-            if name != DatasetAssetsKey and name != GraphAssetsKey and name != MetadataAssetsKey:
+            if name != DatasetAssetsKey and name != MetadataAssetsKey:
                 key = '{}/{}'.format(dataset_id, name)
                 keys.add(key)
                 if name == FileActionKey or name == MetadataCleanupKey or name == RevisionsCleanupKey:
@@ -1035,54 +1033,6 @@ def create_dataset_assets(publish_bucket, embargo_bucket, asset_bucket, dataset_
         upload_content(publish_bucket, dataset_assets, dataset_assets_file_key)
 
     return bucket_keys, asset_bucket_keys
-
-
-def create_graph_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files=True) -> set[str]:
-    publish_keys = set()
-
-    asset_names = ['schema.csv', 'models.csv', 'records.csv', 'relationships.csv']
-    asset_publish_keys = []
-
-    for name in asset_names:
-        key = '{}/{}/{}'.format(dataset_id, MetadataPrefix, name)
-
-        publish_bucket.upload_file(FILENAME, key)
-        embargo_bucket.upload_file(FILENAME, key)
-
-        publish_keys.add(key)
-        asset_publish_keys.append(key)
-
-    if include_intermediate_files:
-        # Populate buckets with a graph.json file that contains info on graph assets
-        graph_assets_file_key = '{}/{}'.format(dataset_id, GraphAssetsKey)
-
-        manifests = []
-
-        # embargo version wouldn't have S3 version ids
-        for (name, key) in zip(asset_names, asset_publish_keys):
-            manifests.append({
-                'path': '{}/{}'.format(MetadataPrefix, name),
-            })
-
-        embargo_graph_assets = json.dumps({
-            'manifests': manifests
-        })
-
-        upload_content(embargo_bucket, embargo_graph_assets, graph_assets_file_key)
-
-        # now add the version ids for the publish bucket version
-        for (key, manifest) in zip(asset_publish_keys, manifests):
-            obj = publish_bucket.Object(key)
-            manifest['s3VersionId'] = obj.version_id
-
-        graph_assets = json.dumps({
-            'manifests': manifests
-        })
-
-        upload_content(publish_bucket, graph_assets, graph_assets_file_key)
-        publish_keys.add(graph_assets_file_key)
-
-    return publish_keys
 
 
 def create_metadata_assets(publish_bucket, embargo_bucket, dataset_id, include_intermediate_files=True) -> set[str]:
