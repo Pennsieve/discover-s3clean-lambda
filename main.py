@@ -167,7 +167,6 @@ CleanupStageTidy = "TIDY"
 
 FileActionKey = "file-actions.json"
 DatasetAssetsKey = "publish.json"
-GraphAssetsKey = "graph.json"
 MetadataAssetsKey = "metadata_intermediate_manifest.json"
 OutputAssetsKey = "outputs.json"
 RevisionsCleanupKey = "cleanup-revisions.json"
@@ -198,7 +197,6 @@ PublishedDatasetVersionKey = "published_dataset_version"
 NoPublishedDatasetVersion = "-1"
 
 PublishingIntermediateFiles = [FileActionKey,
-                               GraphAssetsKey,
                                MetadataAssetsKey,
                                OutputAssetsKey,
                                DatasetAssetsKey,
@@ -388,7 +386,6 @@ def purge_v5_failure(log, s3_client, s3_paginator, s3_clean_config):
     for bucket_id in [s3_clean_config.publish_bucket_id, s3_clean_config.embargo_bucket_id]:
         log.info(f"purge_v5_failure() undo publishing in bucket_id: {bucket_id}")
         delete_dataset_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
-        delete_graph_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         delete_metadata_assets(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         undo_actions(log, s3_client, bucket_id, s3_clean_config.dataset_id)
         if s3_clean_config.tidy_enabled:
@@ -555,28 +552,6 @@ def delete_dataset_assets(log, s3_client, s3_bucket, dataset_id):
                 s3_version = manifest.get("s3VersionId")
                 delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
-
-def delete_graph_assets(log, s3_client, s3_bucket, dataset_id):
-    '''
-    This will delete versions of the graph assets (schemas, models, records) that were copied to the S3 bucket.
-    :param log: logger
-    :param s3_client: an S3 client
-    :param s3_bucket: the name of the S3 bucket
-    :param dataset_id: the published dataset id
-    :return: (none)
-    '''
-    log.info(f"delete_graph_assets() s3_bucket: {s3_bucket} dataset_id: {dataset_id}")
-    s3_asset_key = s3_key_path(dataset_id, GraphAssetsKey)
-    graph_assets = load_json_file_from_s3(log, s3_client, s3_bucket, s3_asset_key)
-    if graph_assets is not None:
-        manifests = graph_assets.get("manifests")
-        if manifests is not None:
-            for manifest in manifests:
-                log.info(f"delete_graph_assets() manifest: {manifest}")
-                s3_path = manifest.get("path")
-                s3_key = s3_key_path(dataset_id, s3_path)
-                s3_version = manifest.get("s3VersionId")
-                delete_object_version(s3_client, s3_bucket, s3_key, s3_version)
 
 def delete_metadata_assets(log, s3_client, s3_bucket, dataset_id):
     '''
