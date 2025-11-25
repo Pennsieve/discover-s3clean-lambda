@@ -78,8 +78,6 @@ data "aws_iam_policy_document" "lambda_iam_policy_document" {
       "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_publish_bucket_arn}/*",
       data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo_bucket_arn,
       "${data.terraform_remote_state.platform_infrastructure.outputs.sparc_embargo_bucket_arn}/*",
-      data.terraform_remote_state.platform_infrastructure.outputs.awsod_edots_publish50_bucket_arn,
-      "${data.terraform_remote_state.platform_infrastructure.outputs.awsod_edots_publish50_bucket_arn}/*",
 
     ]
   }
